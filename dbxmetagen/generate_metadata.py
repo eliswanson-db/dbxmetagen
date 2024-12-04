@@ -13,41 +13,16 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC # Change these variables
+# MAGIC # Change these variables to match your table names, destination schema, and use case.
 
 # COMMAND ----------
 
-base_url = "https://adb-830292400663869.9.azuredatabricks.net/serving-endpoints" # change this to the workspace url you are in
-catalog = "eswanson_genai" # should source and dest catalog be the same? Currently yes, could be changed
-catalog_tokenizable = "eswanson_genai_{{env}}" ### Change this to match the tokenization approach you need for artifacts in a build pipeline. This will be written into DDL files, so if you want this to match the catalog exactly, or handle tokenization with a different tool.
-table_names = ["default.simple_test", "default.simple_test2"]
-dest_schema = "test" # dest schema will generally differ from the source schema, allowing different source and dest schemas
-#test_schema = "test" # 
-volume_name = "generated_metadata" # Either need to be able to create a volume in a schema, or have the volume pre-created.
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Maybe change these variables
-
-# COMMAND ----------
-
+metadata_params = {
+    "table_names": ["default.simple_test", "default.simple_test2"],
+    "dest_schema": "test",
+    "mode": "comment"
+    }
 acro_content = "{'DBX': 'Databricks'}"
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Be careful changing these - could reduce quality or increase cost
-
-# COMMAND ----------
-
-### A much simpler, bare bones result would probably be attainable from decreasing the sample size, decreasing the max tokens, decreasing the temperature, increasing the columns per call, and potentially changing the model to "databricks-dbrx-instruct".
-sample_size=10 # up to a point, higher is more info/better, but it costs more and more is not always better
-max_tokens=3000 # mostly a cost vs. quality tradeoff
-max_prompt_length=3000 # caps the prompt length. If a prompt is longer than this, the run will fail.
-temperature = 0.1 # the 'creativity' of the model, higher is more creative but more hallucinations
-columns_per_call=10 # More columns per call may be cheaper and faster overall, but could reduce complexity and quality of responses for columns and lead to unexpected behavior.
-model = "databricks-meta-llama-3-1-70b-instruct" # other options that could be explored for example would be "databricks-meta-llama-3-1-405b-instruct", "databricks-dbrx-instruct"
 
 # COMMAND ----------
 
@@ -56,10 +31,10 @@ model = "databricks-meta-llama-3-1-70b-instruct" # other options that could be e
 
 # COMMAND ----------
 
-source_file = None # intended as a placeholder, use this once the read table names from csv option is implemented
+source_file = "table_names.txt"
 test = False
 generation_mode = "comment" # can also be pi, pi not fully implemented
-tagging_mode = "generate_ddl" # generate_ddl will also create a log table
+tagging_mode = "generate_ddl" # generate_ddl will also create a log table. Other options not implemented.
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 
 # COMMAND ----------
@@ -69,7 +44,7 @@ from openai import OpenAI
 import os
 from pydantic.dataclasses import dataclass
 from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
-from mlflow.types.llm import TokenUsageStats
+from mlflow.types.llm import TokenUsageStats, ChatResponse
 import json
 import re
 from typing import List, Dict, Any, Literal, Tuple
@@ -84,84 +59,34 @@ import mlflow
 from pyspark.sql.functions import lit
 import time
 import random
+from abc import ABC
+
+from src.prompts import create_prompt_template
+from src.config import MetadataConfig
 
 # COMMAND ----------
 
 os.environ["DATABRICKS_TOKEN"]=api_key
-os.environ["DATABRICKS_HOST"]=base_url
+os.environ["DATABRICKS_HOST"]=MetadataConfig.SETUP_PARAMS['base_url']
 
 # COMMAND ----------
-
-def create_prompt_template(content, acro_content):
-    return {"pi":
-              [
-                {
-                    "role": "system",
-                    "content": f"You are an AI assistant trying to help identify personally identifying information. Please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content." 
-                },
-                {
-                    "role": "user",
-                    "content": f"""Please look at each column in {content} and identify if the content represents a person, an address, an email, or a potentially valid national ID for a real country and provide a probability that it represents personally identifying information - confidence - scaled from 0 to 1. In addition, provide a classification for PCI or PHI if there is some probability that these are true. 
-                    
-                    Content will be provided as a Python dictionary in a string, formatted like this example, but the table name and column names might vary: {{"table_name": "finance.restricted.monthly_recurring_revenue", "column_names": ["name", "address", "email", "ssn", "religion"], "column_contents": [["John Johnson", "123 Main St", "jj@msn.com", "664-35-1234", "Buddhist"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "664-35-1234", "Episcopalian"]]}}. Please provide the response as a dictionary in a string. Options for classification are 'phi', 'none', or 'pci'. phi is health information that is tied to pi.
-
-                    pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another. Example: if the content is the example above, then the response should look like {{"table": "pi", "column_names": ["name", "address", "email", "ssn", "religion"], "column_contents": [{{"classification": "pi", "type": "name", "confidence": 0.8}}, {{"classification": "pi", "type": "address", "confidence": 0.7}}, {{"classification": "pi", "type": "email", "confidence": 0.9}}, {{"classification": "pi", "type": "national ID", "confidence": 0.5}}, {{"classification": "none", "type": "none", "confidence": 0.95}}]}}. Modifier: if the content of a column is like {{"appointment_text": "John Johnson has high blood pressure"}}, then the classification should be "phi" and if a column appears to be a credit card number or a bank account number then it should be labeled as "pci". 'type' values allowed include 'name', 'location', 'national ID', 'email', and 'phone'. If the confidence is less than 0.5, then the classification should be 'none'. 
-                    
-                    Please don't respond with any other content other than the dictionary.
-                    """
-                }
-              ],
-              "comment":
-              [
-                {
-                    "role": "system",
-                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. Please respond only with a dictionary in the specified format - {{"table": "finance.restricted.customer_monthly_recurring_revenue", "column_names": ["name", "address", "email", "revenue"], "column_contents": [["John Johnson", "123 Main St", "jj@msn.com", "2024-01-05", NULL], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "2024-01-05", NULL]}}. Do not use the exact content from the examples given in the prompt unless it really makes sense to. Generate descriptions based on the data and column names provided. Ensure the descriptions are detailed but concise, using between 50 to 200 words for the table comments and 20 to 50 words for column comments. If column names are informative, prioritize them; otherwise, rely more on the data content. Please unpack any acronyms, initialisms, and abbreviations unless they are in common parlance like SCUBA. Column contents will only represent a subset of data in the table so please provide information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample. Do not add a note after the dictionary, any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
-                    
-                    Please generate a description for the table and columns in the following string. The content string will be provided as a Python dictionary in a string, formatted like in the examples, but the table name and column names might vary. Please generate table names between 50 and 200 words considering the catalog, schema, table, as well as column names and content. Please generate column descriptions between 10 and 50 words."""
-                },
-                {
-                    "role": "user",
-                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": [{"name": ["John Johnson", "Alice Ericks"]}, {"address": ["123 Main St", "6789 Fake Ave"]}, {"email": ["jj@msn.com", "alice.ericks@aol.com"]}, {"revenue": ["$355.45", "$4850.00"]}, {"eap_created": ["2024-01-01", "2024-12-01"]}, {"delete_flag": ["True", NULL]}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}"""
-                },
-                {   "role": "assistant",
-                    "content": """{"table": "Predictable recurring revenue earned from subscriptions in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "column_names": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system."]}""" 
-                },
-                {
-                    "role": "user",
-                    "content": """Content is here - {"table_name": "enterprise.master_data.customer_master", "column_contents": [{"name": ["John Johnson", "Alice Ericks", "Charlie J. Berens", None]}, {"address": ["123 Main St", "6789 Fake Ave", "42909 Johnsone Street, Dallas, Texas 44411-1111]}, {"cid": ["429184984", "443345555"]}, {"PN": ["(214) 555-0100", "(214) 555-0101"]}, {"email": ["jj@msn.com", "alice.ericks@aol.com"]}, {"dob": ["1980-01-01", "1980-01-02"]}} and abbreviations and acronyms are here - {"EAP: enterprise architecture platform, BU: business unit, PN: phone number, dob: date of birth"}"""
-                },
-                {   "role": "assistant",
-                    "content": """{"table": "Master data for customers. Customer master data is a non-transactional information that identifies and describes a customer within a business's database. Contains customer names, addresses, phone numbers, email addresses, and date of birth. This table appears to be customer master data used enterprise-wide. There appears to be some risk of personally identifying information appearing in this table.", "column_names": ["name", "address", "cid", "PN", "email", "dob"], "column_contents": ["Customer's first and last name. In some cases, middle initial is included so it's possible that this is a free form entry field or that a variety of options are available for name.", "Customer mailing address including both the number and street name, and in some cases, but not all the city, state, and zipcode. It's possible this is free entry or taken from a variety of sources. The one zipcode in the sample data apppears to be the zipcode +4.", "Customer's unique identifier. This is a 9-digit number that appears to be a customer identifier. This is a column that appears to be a customer identifier. There is a small risk that these could be social security numbers in the United States despite not being labeled as such, as the number of digits match and they're in a customer table.", "Customer's phone number, including the area code and formatted with puncuation.", "Customer's email address with domain name.", "Customer's date of birth in the form of a string, but generally formatted as yyyy-mm-dd or yyyy-dd-mm, unclear which."]}""" 
-                },
-                ### Could add a third 'few-shot example' specific to each workspace or domain it's run in. It's important that you get the schema exactly right.
-                {
-                    "role": "user",
-                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}"""                    
-                }
-
-              ]
-            }
-
-
 
 class DDLGenerator(ABC):
     def __init__(self):
         pass
 
-
-class CommentGenerator(mlflow.pyfunc.ChatModel):
+class MetadataGenerator(mlflow.pyfunc.ChatModel, ABC):
     def __init__(self):
         pass
 
     @classmethod
-    def from_context(cls, context: PythonModelContext):
+    def from_context(cls, context: mlflow.pyfunc.PythonModelContext):
         chat = cls.__new__(cls)
         return chat
     
     @staticmethod
-    def _format_prompt(prompt):
-        # TODO: add prompt format logic here
-        return formatted_prompt(prompt)
+    def _format_prompt(prompt, content, acro_content):
+        return create_prompt_template(prompt, content, acro_content)
 
     def get_openai_client(self):
        return OpenAI(
@@ -174,14 +99,14 @@ class CommentGenerator(mlflow.pyfunc.ChatModel):
         self.api_key = context.artifacts["api_key"]
         self.base_url = context.artifacts["base_url"]
 
-    def predict(self, context, messages, params):
+    def predict(self, context, messages):
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         prompt = self.create_prompt(messages)
         response = self.client.chat.completions.create(
             messages=prompt,
-            model=params.get("model", "default-model"),
-            max_tokens=params.get("max_tokens", 3000),
-            temperature=params.get("temperature", 0.1)
+            model=context.get("model", "default-model"),
+            max_tokens=context.get("max_tokens", 3000),
+            temperature=context.get("temperature", 0.1)
         )
         text = response.choices[0].message["content"]
 
@@ -212,7 +137,6 @@ class CommentGenerator(mlflow.pyfunc.ChatModel):
     def create_prompt(self, messages):
         # Convert the list of messages to the format expected by the OpenAI API
         return [{"role": message["role"], "content": message["content"]} for message in messages]
-    
 
 class Response(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -294,7 +218,7 @@ class PIChatCompletionResponse:
             return None
 
 
-class CommentChatCompletionResponse:
+class CommentChatCompletionResponse(ABC):
 
     def get_comment_response(self, 
                              content: str, 
@@ -326,6 +250,10 @@ class CommentChatCompletionResponse:
                 raise ValueError(f"Validation error after {max_retries} for {response} with attempts: {e}")
 
 
+class CommentGenerator(MetadataGenerator, CommentChatCompletionResponse):
+    def __init__(self):
+        pass
+
 def load_table_names_from_csv(csv_file_path):
     df_tables = spark.read.csv(csv_file_path, header=True)    
     table_names = [row["table_name"] for row in df_tables.select("table_name").collect()]
@@ -340,11 +268,10 @@ def check_list_and_dict_keys_match(dict_list, string_list):
         return False
     return True
 
-
-def get_response(content: str, prompt_content: str, model: str, max_tokens: int, temperature: float):
+def get_response(content: str, prompt_content: str, model: str, max_tokens: str, temperature: str):
     client = OpenAI(
-        api_key=api_key,
-        base_url=base_url
+        api_key=os.environ['DATABRICKS_TOKEN'],
+        base_url=config.SETUP_PARAMS['base_url']
     )
     chat_completion = client.chat.completions.create(
         messages=prompt_content,
@@ -373,29 +300,32 @@ def exponential_backoff(retries, base_delay=1, max_delay=120, jitter=True):
 
 def get_responses(pi_input_list: List[Dict[str, Any]], 
                   comment_input_data: List[Dict[str, Any]],
-                  mode: str,
-                  model: str,
-                  max_prompt_length: int,
-                  acro_content: str,
-                  max_tokens: int,
-                  temperature: float) -> Tuple[PIResponse, CommentResponse]:
+                  config: MetadataConfig) -> Tuple[PIResponse, CommentResponse]:
     print("getting responses")
     responses = {'pi': None, 'comment': None}
-    if mode == "pi":
-        prompt_template = create_prompt_template(pi_input_list, acro_content)
-        if len(prompt_template) > max_prompt_length:
+    if config.mode == "pi":
+        prompt_template = create_prompt_template(pi_input_list, config.SETUP_PARAMS['acro_content'])
+        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        pi_response, message_payload = PIChatCompletionResponse().get_pi_response(content=pi_input_list, prompt_content=prompt_template['pi'],model=model, max_tokens=max_tokens, temperature=temperature)
+        pi_response, message_payload = PIChatCompletionResponse().get_pi_response(content=pi_input_list, 
+                                                                                  prompt_content=prompt_template['pi'],
+                                                                                  model=config.SETUP_PARAMS['model'], 
+                                                                                  max_tokens=config.SETUP_PARAMS['max_tokens'], 
+                                                                                  temperature=config.SETUP_PARAMS['temperature'])
         responses.append(pi_response)
         responses['pi'] = pi_response
-    elif mode == "comment":
-        prompt_template = create_prompt_template(comment_input_data, acro_content)
-        if len(prompt_template) > max_prompt_length:
+    elif config.mode == "comment":
+        prompt_template = create_prompt_template(comment_input_data, config.SETUP_PARAMS['acro_content'])
+        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        comment_response, message_payload = CommentChatCompletionResponse().get_comment_response(content=comment_input_data, prompt_content=prompt_template['comment'], model=model, max_tokens=max_tokens, temperature=temperature)
+        comment_response, message_payload = CommentChatCompletionResponse().get_comment_response(content=comment_input_data, 
+                                                                                                 prompt_content=prompt_template['comment'], 
+                                                                                                 model=config.SETUP_PARAMS['model'], 
+                                                                                                 max_tokens=config.SETUP_PARAMS['max_tokens'], 
+                                                                                                 temperature=config.SETUP_PARAMS['temperature'])
         responses['comment'] = comment_response
     else: 
-        if mode not in ["pi", "comment"]:
+        if config.mode not in ["pi", "comment"]:
                 raise ValueError("To be valid, mode must be 'pi' or 'comment'.")
     return responses
 
@@ -574,108 +504,6 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     return filtered_df.limit(sample_size)
 
 
-def get_generated_metadata(
-    catalog: str, 
-    schema: str, 
-    table_name: List[str],
-    mode: str,
-    model: str,
-    max_prompt_length: int,
-    acro_content: str,
-    max_tokens: int,
-    temperature: float,
-    columns_per_call: int,
-    sample_size: int
-    ) -> List[Tuple[PIResponse, CommentResponse]]:
-    """
-    Generates metadata for a given table.
-
-    Args:
-        catalog (str): The catalog name.
-        schema (str): The schema name.
-        table_name (str): The table name.
-        model (str): model name
-        prompt_template (str): prompt template
-
-    Returns:
-        List[Dict[str, Any]]: A list of dictionaries containing the generated metadata.
-    """
-    full_table_name = f"{catalog}.{table_name}"
-    df = spark.read.table(full_table_name)
-    nrows = df.count()
-    sampled_df = sample_df(df, nrows, sample_size)
-    chunked_dfs = chunk_df(sampled_df, columns_per_call)
-    responses = []
-    for chunk in chunked_dfs:
-        converter = DataFrameConverter(chunk, full_table_name)
-        pi_input_list = converter.pi_input_list
-        comment_input_data = converter.comment_input_data
-        response = get_responses(pi_input_list, comment_input_data, mode, model, max_prompt_length, acro_content, max_tokens, temperature)
-        responses.append(response)
-    return responses
-
-def review_and_generate_metadata(
-    catalog: str,
-    catalog_tokenizable: str,
-    schema: str,
-    table_names: List[str],
-    mode: str,
-    model: str,
-    max_prompt_length: int,
-    acro_content: str,
-    max_tokens: int,
-    temperature: float,
-    columns_per_call: int,
-    sample_size: int
-    ) -> Tuple[DataFrame, DataFrame]:
-    """
-    Reviews and generates metadata for a list of tables based on the mode.
-
-    Args:
-        catalog (str): The catalog name.
-        schema (str): The schema name.
-        table_names (List[str]): A list of table names.
-        model (str): model name
-        mode (str): Mode to determine whether to process 'pi' or 'comment'
-
-    Returns:
-        Tuple[DataFrame, DataFrame]: DataFrames containing the generated metadata.
-    """
-    print("Review and generate metadata...")
-    
-    catalog = setup_params['catalog']                       
-    catalog_tokenizable = setup_params['catalog_tokenizable']
-    dest_schema = setup_params['dest_schema']
-    table_names = table_names
-    volume_name = setup_params['volume_name']
-    mode = setup_params['mode']
-    model = model_params['model']
-    max_prompt_length = model_params['max_prompt_length']
-    acro_content = model_params['acro_content']
-    max_tokens = model_params['max_tokens']
-    temperature = model_params['temperature']
-    columns_per_call = setup_params['columns_per_call']
-    sample_size = setup_params['sample_size']
-
-    table_rows = []
-    column_rows = []
-    for table_name in table_names:
-        responses = get_generated_metadata(catalog, schema, table_name, mode, model, max_prompt_length, acro_content, max_tokens, temperature, columns_per_call, sample_size)
-        for response in responses:
-            full_table_name = f"{catalog}.{table_name}"
-            tokenized_full_table_name = f"{catalog_tokenizable}.{table_name}"
-            if mode == "pi":
-                response_dict = response['pi']
-            elif mode == "comment":
-                response_dict = response['comment']
-            else:
-                raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
-            table_rows = append_table_row(table_rows, full_table_name, response_dict, tokenized_full_table_name)
-            column_rows = append_column_rows(column_rows, full_table_name, response_dict, tokenized_full_table_name)
-    ### TODO: add all the table comments to an additional summarizer call rather than taking just the first one.         
-    return rows_to_df(column_rows), rows_to_df(table_rows)
-
-
 def append_table_row(rows: List[Row], full_table_name: str, response: Dict[str, Any], tokenized_full_table_name: str) -> List[Row]:
     """
     Appends a table row to the list of rows.
@@ -828,37 +656,28 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
     return uc_volume_path
 
 
-def populate_log_table(df, current_user, model, sample_size, max_tokens, temperature, columns_per_call, base_path):
+def populate_log_table(df, config, current_user, base_path):
         return (df.withColumn("current_user", lit(current_user))
-          .withColumn("model", lit(model))
-          .withColumn("sample_size", lit(sample_size))
-          .withColumn("max_tokens", lit(max_tokens))
-          .withColumn("temperature", lit(temperature))
-          .withColumn("columns_per_call", lit(columns_per_call))
-          #.withColumn("_ddl_written_to", lit(base_path))
+          .withColumn("model", lit(config.SETUP_PARAMS['model']))
+          .withColumn("sample_size", lit(config.SETUP_PARAMS['sample_size']))
+          .withColumn("max_tokens", lit(config.SETUP_PARAMS['max_tokens']))
+          .withColumn("temperature", lit(config.SETUP_PARAMS['temperature']))
+          .withColumn("columns_per_call", lit(config.SETUP_PARAMS['columns_per_call']))
           .withColumn("status", lit("No Volume specified..."))
         )
                     
 
-def log_metadata_generation(df: DataFrame, catalog: str, dest_schema: str, table_names: List[str], volume_name: str) -> None:    
+def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:    
     #display(df)
-    df.write.mode('append').saveAsTable(f"{catalog}.{dest_schema}.metadata_generation_log")
+    df.write.mode('append').saveAsTable(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log")
 
-
-def filter_and_write_ddl(df: DataFrame, 
-                     catalog: str,
-                     dest_schema: str, 
-                     table_name: List[str], 
-                     base_path: str, 
-                     current_user: str, 
-                     current_date: str, 
-                     model, 
-                     max_prompt_length, 
-                     acro_content, 
-                     max_tokens, 
-                     temperature, 
-                     columns_per_call, 
-                     sample_size) -> DataFrame:
+def filter_and_write_ddl(df: DataFrame,                          
+                         config: MetadataConfig,
+                         base_path: str,
+                         table_name: str,
+                         current_user: str,
+                         current_date: str
+                         ) -> DataFrame:
     """Filter the DataFrame based on the table name and write the DDL statements to a SQL file.
     Args:
         df (DataFrame): The DataFrame containing the DDL statements.
@@ -869,18 +688,18 @@ def filter_and_write_ddl(df: DataFrame,
         current_user: str
         current_date: str
     """
-    df = df.filter(df['table'] == f"{catalog}.{table_name}")
+    df = df.filter(df['table'] == f"{config.SETUP_PARAMS['catalog']}.{table_name}")
     ddl_statements = df.select("ddl").collect()
     table_name = re.sub(r'[^\w\s/]', '_', table_name)
     file_path = os.path.join(base_path, f"{table_name}.sql")
     try:
         write_ddl_to_volume(file_path, base_path, ddl_statements)
         df = df.withColumn("status", lit("Success"))
-        log_metadata_generation(df, catalog, dest_schema, [table], base_path)
+        log_metadata_generation(df, config, table, base_path)
     except Exception as e:
         print(f"Error writing DDL to volume: {e}. Check if Volume exists and if your permissions are correct.")        
         df = df.withColumn("status", lit("Failed writing to volume..."))
-        log_metadata_generation(df, catalog, dest_schema, [table], base_path)
+        log_metadata_generation(df, config, table, base_path)
     
 
 def create_folder_if_not_exists(folder_path):
@@ -911,9 +730,8 @@ def write_ddl_to_volume(file_path: str, base_path: str, ddl_statements: List[str
 
 
 def create_and_persist_ddl(df: DataFrame,
-                           setup_params: Dict[str, Any],
-                           model_params: Dict[str, Any],
-                           table_names: List[str]
+                           config: MetadataConfig,
+                           table_name: str
                            ) -> None:
     """
     Writes the DDL statements from the DataFrame to a volume as SQL files.
@@ -922,118 +740,164 @@ def create_and_persist_ddl(df: DataFrame,
         df (DataFrame): The DataFrame containing the DDL statements.
         catalog (str): The catalog name.
         dest_schema (str): The destination schema name.
-        table_names (List[str]): A list of table names.
+        table_name (str): A list of table names.
         volume_name (str): The volume name.
     """
-
-    catalog = setup_params['catalog']                       
-    catalog_tokenizable = setup_params['catalog_tokenizable']
-    dest_schema = setup_params['dest_schema']
-    table_names = table_names
-    volume_name = setup_params['volume_name']
-    mode = setup_params['mode']
-    model = model_params['model']
-    max_prompt_length = model_params['max_prompt_length']
-    acro_content = model_params['acro_content']
-    max_tokens = model_params['max_tokens']
-    temperature = model_params['temperature']
-    columns_per_call = setup_params['columns_per_call']
-    sample_size = setup_params['sample_size']
-
-
     print("Running create and persist ddl...")
     current_user = get_current_user()
     current_date = datetime.now().strftime('%Y%m%d')
-    if volume_name:
-        base_path = f"/Volumes/{catalog}/{dest_schema}/{volume_name}/{current_user}/{current_date}"
-        for table_name in table_names:
-            print(f"Writing DDL for {table_name}...")
-            table_df = df[f'{mode}_table_df']            
-            table_df = populate_log_table(table_df, current_user, model, sample_size, max_tokens, temperature, columns_per_call, volume_name)
-            modified_path = re.sub(r'[^\w\s/]', '_', base_path)
-            filter_and_write_ddl(table_df, catalog, dest_schema, table_name, modified_path, current_user, current_date, model, max_prompt_length, acro_content, max_tokens, temperature, columns_per_call, sample_size)
-            column_df = df[f'{mode}_column_df']
-            column_df = populate_log_table(column_df, current_user, model, sample_size, max_tokens, temperature, columns_per_call, volume_name)
-            modified_path = re.sub(r'[^\w\s/]', '_', base_path)
-            filter_and_write_ddl(column_df, catalog, dest_schema, table_name, modified_path, current_user, current_date, model, max_prompt_length, acro_content, max_tokens, temperature, columns_per_call, sample_size)
+    if config.SETUP_PARAMS['volume_name']:
+        base_path = f"/Volumes/{config.SETUP_PARAMS['catalog']}/{config.dest_schema}/{config.SETUP_PARAMS['volume_name']}/{current_user}/{current_date}"
+        print(f"Writing DDL for {table_name}...")
+        table_df = df[f'{config.mode}_table_df']            
+        table_df = populate_log_table(table_df, config, current_user, base_path)
+        modified_path = re.sub(r'[^\w\s/]', '_', base_path)
+        filter_and_write_ddl(table_df, config, modified_path, table_name, current_user, current_date)
+        column_df = df[f'{config.mode}_column_df']
+        column_df = populate_log_table(column_df, config, current_user, base_path)
+        modified_path = re.sub(r'[^\w\s/]', '_', base_path)
+        filter_and_write_ddl(column_df, config, modified_path, table_name, current_user, current_date)
     else:
-        print("No volume name provided. Not writing DDL to volume...")
-        table_df = populate_log_table(df['comment_table_df'], current_user, model, sample_size, max_tokens, temperature, columns_per_call, volume_name)
-        log_metadata_generation(table_df, catalog, dest_schema, table_names, volume_name)
-        column_df = populate_log_table(df['comment_column_df'], current_user, model, sample_size, max_tokens, temperature, columns_per_call, volume_name)
-        log_metadata_generation(column_df, catalog, dest_schema, table_names, volume_name)
+        print("Volume name provided as None in configuration. Not writing DDL to volume...")
+        table_df = populate_log_table(df['comment_table_df'], config, current_user, base_path)
+        log_metadata_generation(table_df, config)
+        column_df = populate_log_table(df['comment_column_df'], config, current_user, base_path)
+        log_metadata_generation(column_df, config)
 
 
-def process_and_add_ddl(setup_params: Dict[str, Any], model_params: Dict[str, Any], tabe_names: List[str]) -> DataFrame:
+
+def get_generated_metadata(
+    config: MetadataConfig,
+    table_name: str
+    ) -> List[Tuple[PIResponse, CommentResponse]]:
+    """
+    Generates metadata for a given table.
+
+    Args:
+        catalog (str): The catalog name.
+        schema (str): The schema name.
+        table_name (str): The table name.
+        model (str): model name
+        prompt_template (str): prompt template
+
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries containing the generated metadata.
+    """
+    full_table_name = f"{config.SETUP_PARAMS['catalog']}.{table_name}"
+    df = spark.read.table(full_table_name)
+    nrows = df.count()
+    sampled_df = sample_df(df, nrows, config.SETUP_PARAMS['sample_size'])
+    chunked_dfs = chunk_df(sampled_df, config.SETUP_PARAMS['columns_per_call'])
+    responses = []
+    for chunk in chunked_dfs:
+        converter = DataFrameConverter(chunk, full_table_name)
+        pi_input_list = converter.pi_input_list
+        comment_input_data = converter.comment_input_data
+        response = get_responses(pi_input_list, comment_input_data, config)
+        responses.append(response)
+    return responses
+
+
+def review_and_generate_metadata(
+    config: MetadataConfig,
+    table_name: str
+    ) -> Tuple[DataFrame, DataFrame]:
+    """
+    Reviews and generates metadata for a list of tables based on the mode.
+
+    Args:
+        catalog (str): The catalog name.
+        schema (str): The schema name.
+        table_names (str): A list of table names.
+        model (str): model name
+        mode (str): Mode to determine whether to process 'pi' or 'comment'
+
+    Returns:
+        Tuple[DataFrame, DataFrame]: DataFrames containing the generated metadata.
+    """
+    print("Review and generate metadata...")
+    table_rows = []
+    column_rows = []
+    responses = get_generated_metadata(config, table_name)
+    for response in responses:
+        full_table_name = f"{config.SETUP_PARAMS['catalog']}.{table_name}"
+        tokenized_full_table_name = f"{config.SETUP_PARAMS['catalog_tokenizable']}.{table_name}"
+        if config.mode == "pi":
+            response_dict = response['pi']
+        elif config.mode == "comment":
+            response_dict = response['comment']
+        else:
+            raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
+        table_rows = append_table_row(table_rows, full_table_name, response_dict, tokenized_full_table_name)
+        column_rows = append_column_rows(column_rows, full_table_name, response_dict, tokenized_full_table_name)
+    ### TODO: add all the table comments to an additional summarizer call rather than taking just the first one.         
+    return rows_to_df(column_rows), rows_to_df(table_rows)
+
+
+def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     """
     Processes the metadata, splits the DataFrame based on 'table' values, applies DDL functions, and returns a unioned DataFrame.
 
     Args:
         catalog (str): The catalog name data is being read from and written to.
         dest_schema (str): The destination schema name.
-        table_names (List[str]): A list of table names.
+        table_names (str): A list of table names.
         model (str): The model name.
 
     Returns:
         DataFrame: The unioned DataFrame with DDL statements added.
     """
     print("Process and add ddl...")
-    column_df, table_df = review_and_generate_metadata(setup_params, model_params, table_names)
+    column_df, table_df = review_and_generate_metadata(config, table_name)
     dfs = {}
-    if mode == "comment":
+    if config.mode == "comment":
         # TODO: turn this into a class
         table_df = add_ddl_to_table_comment_df(table_df, "ddl")
         column_df = add_ddl_to_column_comment_df(column_df, "ddl")
+        # TODO: instead of taking the first table description, fetch all and send to a summarizer.
         dfs['comment_table_df'] = table_df.limit(1)
         dfs['comment_column_df'] = column_df
-    elif mode == "pi":
+    elif config.mode == "pi":
         table_df = add_column_ddl_to_pi_df(table_df, "ddl")
         dfs['pi_table_df'] = table_df.limit(1)
         dfs['pi_column_df'] = column_df    
     return dfs
 
 
-def create_schema(setup_params: Dict[str, Any]) -> None:
-    if setup_params["volume_name"]:
-        spark.sql(f"CREATE VOLUME IF NOT EXISTS {setup_params['catalog']}.{setup_params['dest_schema']}.{setup_params['volume_name']}")
+def create_schema(config: MetadataConfig) -> None:
+    """
+    Creates a schema volume if it does not already exist.
+
+    Args:
+        setup_params (Dict[str, Any]): A dictionary containing setup parameters including:
+            - catalog (str): The catalog name.
+            - dest_schema (str): The destination schema name.
+            - volume_name (str): The volume name.
+    """
+    if config.SETUP_PARAMS["volume_name"]:
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['volume_name']}")
 
 
-def generate_and_persist_comments(setup_params: Dict[str, Any], model_params: Dict[str, Any]) -> None:
+def generate_and_persist_comments(config) -> None:
     """
     Generates and persists comments for tables based on the provided setup and model parameters.
 
     Args:
-        setup_params (Dict[str, Any]): Dictionary containing setup parameters.
-        model_params (Dict[str, Any]): Dictionary containing model parameters.
+        config (MetadataConfig): Configuration object containing setup and model parameters.
     """
-    create_schema(setup_params)
-    for table in setup_params["table_names"]:
+    create_schema(config)
+    for table in config.table_names:
         print(f"Processing table {table}...")        
-        df = process_and_add_ddl(setup_params, model_params, table_names=[table])        
+        df = process_and_add_ddl(config, table)        
         print(f"Generating and persisting ddl for {table}...")
-        create_and_persist_ddl(df, setup_params, model_params, table_names=[table])
+        create_and_persist_ddl(df, config, table)
 
 # COMMAND ----------
 
-
-setup_params = {
-    "catalog": catalog,
-    "catalog_tokenizable": catalog_tokenizable,
-    "dest_schema": dest_schema,
-    "table_names": table_names,
-    "generation_mode": generation_mode,
-    "model": model,
-    "max_prompt_length": max_prompt_length,
-    "volume_name": volume_name,
-    "acro_content": acro_content,
-    "columns_per_call": columns_per_call,
-    "sample_size": sample_size,
-}
-
-model_params = {
-    "max_tokens": max_tokens,
-    "temperature": temperature,
-}
+config = MetadataConfig(**metadata_params)
+print(config.SETUP_PARAMS)
+print(config.table_names)
+print(config.dest_schema)
 
 # COMMAND ----------
 
@@ -1042,11 +906,11 @@ model_params = {
 
 # COMMAND ----------
 
-generate_and_persist_comments(setup_params, model_params)
+generate_and_persist_comments(config)
 
 # COMMAND ----------
 
-df = spark.read.table(f"{catalog}.{dest_schema}.metadata_generation_log")
+df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log")
 
 # COMMAND ----------
 
