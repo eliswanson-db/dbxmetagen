@@ -1,0 +1,6 @@
+resources:
+  tables:
+    control_table:
+      catalog_name: ${var.catalog_name}
+      schema_name: ${var.schema_name}
+      name: metadata_control

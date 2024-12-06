@@ -4,7 +4,8 @@ bundle:
 
 include:
   - resources/jobs/*.yml
-  - resources/models/*.yml
+  - resources/schemas/*.yml
+  - resources/tables/*.yml
 
 variables: 
   current_user:
