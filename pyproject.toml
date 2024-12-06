@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dbxmetagen"
+name = "dbxmetagen.src"
 version = "0.2.3"
 description = "Generates comments and other metadata for Delta tables in Databricks."
 readme = "README.md"

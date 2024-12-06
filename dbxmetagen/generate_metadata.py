@@ -4,23 +4,16 @@
 
 # COMMAND ----------
 
-
-
-# TODO: Summarizer step for table comments
-# TODO: Setup with OOP better
 # TODO: register a pyfunc so that we can iterate on prompts
-# TODO: Add metadata to the table from information schema - datatype. Not needed if we continue to pull from column metadata. Depends on performance.
-
-
 # TODO: Flag for detailed column metrics - null count, min, max, number of values and examples of values.
 # TODO: Separate out table comments into its own Response
-# TODO: Create a structure for the comments themselves as to what we expect.
-    # 1. 
-    # 2. 
-    # 3. 
+# TODO: Summarizer step for table comments
 # TODO: Improve outputs to improve prompting for Genie
 # TODO: Add async
 # TODO: any utility of agent framework?
+# TODO: Fix input data classes
+# TODO: Move modules out of notebook
+# TODO: whl build
 
 # COMMAND ----------
 
@@ -91,12 +84,6 @@ class DDLGenerator(ABC):
     def __init__(self):
         pass
 
-class Response(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    table: str
-    column_names: List[str]
-
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -119,6 +106,13 @@ class CommentInput(Input):
     column_contents: List[List[Any]]
 
 
+class Response(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    column_names: List[str]
+
+    
 class PIResponse(Response):
     model_config = ConfigDict(extra="forbid")
 
@@ -205,14 +199,23 @@ class CommentChatCompletionResponse(ABC):
                 print("Validation error - response")
                 raise ValueError(f"Validation error after {max_retries} attempts: {e}")
 
-    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float) -> ChatCompletion:
+    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
         client = OpenAI(api_key=os.environ['DATABRICKS_TOKEN'], base_url=config.SETUP_PARAMS['base_url'])
-        return client.chat.completions.create(
-            messages=prompt_content,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+        try:
+            return client.chat.completions.create(
+                messages=prompt_content,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        except Exception as e:
+            if retries < max_retries:
+                print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
+                exponential_backoff(retries)
+                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+            else:
+                print(f"Failed after {max_retries} retries.")
+                raise e
 
     def _parse_response(self, response: str) -> Dict[str, Any]:
         try:
@@ -224,8 +227,23 @@ class CommentChatCompletionResponse(ABC):
             raise ValueError(f"JSON decode error: {e}")
 
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
+        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
             raise ValueError("Column names do not match column contents")
+    
+    @staticmethod
+    def _check_list_and_dict_keys_match(dict_list, string_list):
+        if isinstance(dict_list, list):
+            dict_keys = dict_list
+        else:
+            try:
+                dict_keys = dict_list.keys()
+            except: 
+                raise TypeError("dict_list is not a list or a dictionary")
+        list_matches_keys = all(item in dict_keys for item in string_list)
+        keys_match_list = all(key in string_list for key in dict_keys)
+        if not (list_matches_keys and keys_match_list):
+            return False
+        return True
 
 
 
@@ -293,7 +311,6 @@ class MetadataGenerator(mlflow.pyfunc.ChatModel, CommentChatCompletionResponse, 
         return [{"role": message["role"], "content": message["content"]} for message in messages]
 
 
-
 class CommentGenerator(MetadataGenerator, CommentChatCompletionResponse):
     def __init__(self):
         pass
@@ -303,21 +320,7 @@ class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
     def __init__(self):
         pass
 
-
-def check_list_and_dict_keys_match(dict_list, string_list):
-    if isinstance(dict_list, list):
-        dict_keys = dict_list
-    else:
-        try:
-            dict_keys = dict_list.keys()
-        except: 
-            raise TypeError("dict_list is not a list or a dictionary")
-    list_matches_keys = all(item in dict_keys for item in string_list)
-    keys_match_list = all(key in string_list for key in dict_keys)
-    if not (list_matches_keys and keys_match_list):
-        return False
-    return True
-
+# COMMAND ----------
 
 def get_response(config, content: str, prompt_content: str, model: str, max_tokens: str, temperature: str):
     client = OpenAI(
@@ -351,7 +354,7 @@ def exponential_backoff(retries, base_delay=1, max_delay=120, jitter=True):
 
 def get_responses(chat_response,
                   config: MetadataConfig) -> Tuple[PIResponse, CommentResponse]:
-    print("getting responses")
+    print("Getting responses...")
     pi_input_list = None # Hard coding this until full factory is setup.
     responses = {'pi': None, 'comment': None}
     if config.mode == "pi":
@@ -731,13 +734,16 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         table_name (str): The name of the table to update.
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
+    print(table_name)
     control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    print(control_table)
     update_query = f"""
     UPDATE {control_table}
     SET _deleted_at = current_timestamp(), 
         _updated_at = current_timestamp()
     WHERE table_name = '{table_name}'
     """
+    print(update_query)
     spark.sql(update_query)
     print(f"Marked {table_name} as deleted in the control table...")
 
@@ -750,7 +756,7 @@ def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: s
 def filter_and_write_ddl(df: DataFrame,                          
                          config: MetadataConfig,
                          base_path: str,
-                         table_name: str,
+                         full_table_name: str,
                          current_user: str,
                          current_date: str
                          ) -> DataFrame:
@@ -764,18 +770,19 @@ def filter_and_write_ddl(df: DataFrame,
         current_user: str
         current_date: str
     """
-    df = df.filter(df['table'] == f"{config.SETUP_PARAMS['catalog']}.{table_name}")
+    df = df.filter(df['table'] == full_table_name)
+    print("df filtering...")
     ddl_statements = df.select("ddl").collect()
-    table_name = re.sub(r'[^\w\s/]', '_', table_name)
+    table_name = re.sub(r'[^\w\s/]', '_', full_table_name)
     file_path = os.path.join(base_path, f"{table_name}.sql")
     try:
         write_ddl_to_volume(file_path, base_path, ddl_statements)
         df = df.withColumn("status", lit("Success"))
-        log_metadata_generation(df, config, table_name, base_path)
+        log_metadata_generation(df, config, full_table_name, base_path)
     except Exception as e:
         print(f"Error writing DDL to volume: {e}. Check if Volume exists and if your permissions are correct.")        
         df = df.withColumn("status", lit("Failed writing to volume..."))
-        log_metadata_generation(df, config, table_name, base_path)
+        log_metadata_generation(df, config, full_table_name, base_path)
     
 
 def create_folder_if_not_exists(folder_path):
@@ -801,7 +808,7 @@ def write_ddl_to_volume(file_path: str, base_path: str, ddl_statements: List[str
         print(f"Error creating folder: {e}. Check if Volume exists and if your permissions are correct.")
     with open(file_path, 'w') as file:
         for row in ddl_statements:
-            #print(f"Writing DDL: {row['ddl']}")
+            print(f"Writing DDL: {row['ddl']}")
             file.write(f"{row['ddl']}\n")
 
 
@@ -825,12 +832,13 @@ def create_and_persist_ddl(df: DataFrame,
     if config.SETUP_PARAMS['volume_name']:
         base_path = f"/Volumes/{config.SETUP_PARAMS['catalog']}/{config.dest_schema}/{config.SETUP_PARAMS['volume_name']}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
-        table_df = df[f'{config.mode}_table_df']            
+        table_df = df[f'{config.mode}_table_df']
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         filter_and_write_ddl(table_df, config, modified_path, table_name, current_user, current_date)
         print(f"Writing DDL for {table_name} for columns...")
         column_df = df[f'{config.mode}_column_df']
+        "Column df..."
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         filter_and_write_ddl(column_df, config, modified_path, table_name, current_user, current_date)
@@ -845,7 +853,7 @@ def create_and_persist_ddl(df: DataFrame,
 
 def get_generated_metadata(
     config: MetadataConfig,
-    table_name: str
+    full_table_name: str
     ) -> List[Tuple[PIResponse, CommentResponse]]:
     """
     Generates metadata for a given table.
@@ -860,7 +868,6 @@ def get_generated_metadata(
     Returns:
         List[Dict[str, Any]]: A list of dictionaries containing the generated metadata.
     """
-    full_table_name = f"{config.SETUP_PARAMS['catalog']}.{table_name}"
     df = spark.read.table(full_table_name)
     nrows = df.count()
     chunked_dfs = chunk_df(df, config.SETUP_PARAMS['columns_per_call'])
@@ -868,9 +875,6 @@ def get_generated_metadata(
     for chunk in chunked_dfs:
         sampled_chunk = sample_df(chunk, nrows, config.SETUP_PARAMS['sample_size'])
         chat_response = CommentChatCompletionResponse(config, sampled_chunk, full_table_name)
-        #chat_response = PIChatCompletionResponse(sampled_chunk, full_table_name)
-        #pi_input_list = converter.pi_input_list
-        #comment_input_data = converter.comment_input_data
         response = get_responses(chat_response, config)
         responses.append(response)
     return responses
@@ -878,7 +882,7 @@ def get_generated_metadata(
 
 def review_and_generate_metadata(
     config: MetadataConfig,
-    table_name: str
+    full_table_name: str
     ) -> Tuple[DataFrame, DataFrame]:
     """
     Reviews and generates metadata for a list of tables based on the mode.
@@ -896,10 +900,9 @@ def review_and_generate_metadata(
     print("Review and generate metadata...")
     table_rows = []
     column_rows = []
-    responses = get_generated_metadata(config, table_name)
+    responses = get_generated_metadata(config, full_table_name)
     for response in responses:
-        full_table_name = f"{config.SETUP_PARAMS['catalog']}.{table_name}"
-        tokenized_full_table_name = f"{config.SETUP_PARAMS['catalog_tokenizable']}.{table_name}"
+        tokenized_full_table_name = replace_catalog_name(config, full_table_name)
         if config.mode == "pi":
             response_dict = response['pi']
         elif config.mode == "comment":
@@ -910,6 +913,23 @@ def review_and_generate_metadata(
         column_rows = append_column_rows(column_rows, full_table_name, response_dict, tokenized_full_table_name)
     ### TODO: add all the table comments to an additional summarizer call rather than taking just the first one.         
     return rows_to_df(column_rows), rows_to_df(table_rows)
+
+
+def replace_catalog_name(config, full_table_name):
+    """
+    Replaces __CATALOG_NAME__ in a string with the actual catalog name from a fully scoped table name.
+
+    Args:
+        config (MetadataConfig): Configuration object containing setup parameters.
+        full_table_name (str): The fully scoped table name.
+
+    Returns:
+        str: The string with the catalog name replaced.
+    """
+    catalog_tokenizable = config.SETUP_PARAMS['catalog_tokenizable']
+    catalog_name = full_table_name.split('.')[0]
+    
+    return catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
 
 
 def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
@@ -938,7 +958,8 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     elif config.mode == "pi":
         table_df = add_column_ddl_to_pi_df(table_df, "ddl")
         dfs['pi_table_df'] = table_df.limit(1)
-        dfs['pi_column_df'] = column_df    
+        dfs['pi_column_df'] = column_df   
+    print(dfs) 
     return dfs
 
 
@@ -996,20 +1017,38 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    queued_table_names = set()
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
-        print("Control df:")
-        display(control_df)
         queued_table_names = {row["table_name"] for row in control_df.collect()}
-    print("Queued table names", queued_table_names)
     config_table_names = config.table_names
-    print("Config table names", config_table_names)
     file_table_names = load_table_names_from_csv(config.SETUP_PARAMS['source_file_path'])
-    print("File table names", file_table_names)
-    #combined_table_names = list(set().union(set(queued_table_names), set(config_table_names), set(file_table_names)))
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
-    print("Combined table names", combined_table_names)
+    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.SETUP_PARAMS['catalog'])
     return combined_table_names
+
+
+def ensure_fully_scoped_table_names(table_names: List[str], default_catalog: str) -> List[str]:
+    """
+    Ensures that table names are fully scoped with catalog and schema.
+
+    Args:
+        table_names (List[str]): A list of table names.
+        default_catalog (str): The default catalog name to use if not specified.
+
+    Returns:
+        List[str]: A list of fully scoped table names.
+    """
+    fully_scoped_table_names = []
+    for table_name in table_names:
+        parts = table_name.split('.')
+        if len(parts) == 2:
+            fully_scoped_table_names.append(f"{default_catalog}.{table_name}")
+        elif len(parts) == 3:
+            fully_scoped_table_names.append(table_name)
+        else:
+            raise ValueError(f"Invalid table name format: {table_name}")
+    return fully_scoped_table_names
 
 
 def upsert_table_names_to_control_table(table_names: List[str], config: MetadataConfig) -> None:
@@ -1022,6 +1061,7 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print("Upserting table names to control table {table_names}...")
     control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    table_names = ensure_fully_scoped_table_names(table_names, config.SETUP_PARAMS['catalog'])
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
     existing_df = spark.read.table(control_table)
     new_table_names_df = table_names_df.join(existing_df, on="table_name", how="left_anti") \
@@ -1029,7 +1069,7 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
                                     .withColumn("_deleted_at", lit(None).cast(TimestampType()))
     if new_table_names_df.count() > 0:
         new_table_names_df.write.format("delta").mode("append").saveAsTable(control_table)
-        print(f"Upserted {new_table_names_df.count()} new table names into the control table {control_table}...")
+        print(f"Inserted {new_table_names_df.count()} new table names into the control table {control_table}...")
     else:
         print("No new table names to upsert.")
 
@@ -1064,7 +1104,7 @@ main(METADATA_PARAMS)
 # COMMAND ----------
 
 config = MetadataConfig(**METADATA_PARAMS)
-df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log")
+df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log").orderBy(col('_created_at').desc())
 display(df)
 
 # COMMAND ----------
@@ -1072,3 +1112,7 @@ display(df)
 config = MetadataConfig(**METADATA_PARAMS)
 df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_control")
 display(df)
+
+# COMMAND ----------
+
+#spark.sql(f"DROP TABLE {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_control")

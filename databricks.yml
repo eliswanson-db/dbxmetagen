@@ -1,11 +1,10 @@
 bundle:
   name: dbxmetagen
-  databricks_cli_version: "0.235.*"
+  databricks_cli_version: ">=0.236.*"
 
 include:
   - resources/jobs/*.yml
   - resources/schemas/*.yml
-  - resources/tables/*.yml
 
 variables: 
   current_user:

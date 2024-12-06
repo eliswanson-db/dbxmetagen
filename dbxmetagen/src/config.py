@@ -3,14 +3,14 @@ class MetadataConfig:
     SETUP_PARAMS = {
         "base_url": "https://adb-830292400663869.9.azuredatabricks.net/serving-endpoints",
         "catalog": "eswanson_genai",
-        "catalog_tokenizable": "eswanson_genai_{{env}}",
+        "catalog_tokenizable": "__CATALOG_NAME__", #"__CATALOG_NAME___{{env}}", # __CATALOG_NAME__
         "model": "databricks-meta-llama-3-1-70b-instruct",
-        "max_prompt_length": 3000,
+        "max_prompt_length": 5000,
         "volume_name": "generated_metadata",
         "acro_content": ACRO_CONTENT,
-        "columns_per_call": 10,
+        "columns_per_call": 5,
         "sample_size": 10,
-        "max_tokens": 3000,
+        "max_tokens": 5000,
         "temperature": 0.1,
         "table_names_source": "csv_file_path", #could also use a list of table names in the config
         "source_file_path": "table_names.csv",

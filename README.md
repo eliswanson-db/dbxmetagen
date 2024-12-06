@@ -1,5 +1,12 @@
 # DBX Metadata Generation
 
+### Setup
+1. Clone the Repo into Databricks or locally
+1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
+1. If cloned locally, recommend using asset bundle build to create and run a workflow.
+1. Either create a catalog and schema, or use an existing one.
+
+
 ### Current status
 1. Tested on DBR 15.4ML LTS
 1. Currently creates ALTER scripts and puts in a volume. Tested in a databricks workspace.

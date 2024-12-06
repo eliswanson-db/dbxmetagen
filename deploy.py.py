@@ -14,7 +14,7 @@
 
 import os
 current_directory = os.getcwd()
-print(f"{current_directory}/deploy.sh {current_directory}")
+print(f'"{current_directory}/deploy.sh" "{current_directory}"')
 
 # COMMAND ----------
 

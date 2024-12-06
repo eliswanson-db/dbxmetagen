@@ -11,7 +11,7 @@ resources:
         - task_key: notebook_task
           job_cluster_key: job_cluster
           notebook_task:
-            notebook_path: ../dbxmetagen/src/metadata_generator.py
+            notebook_path: ../../dbxmetagen/generate_metadata.py
         
       job_clusters:
         - job_cluster_key: job_cluster

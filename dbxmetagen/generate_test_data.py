@@ -1,11 +1,32 @@
 # Databricks notebook source
-schema = "eswanson_genai.default"
-
-# COMMAND ----------
-
+import os
+import re
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+
+
+# COMMAND ----------
+
+schema = "eswanson_genai.default"
+volume_name = "datasets"
+
+# COMMAND ----------
+
+files = dbutils.fs.ls(f"/Volumes/eswanson_genai/default/{volume_name}")
+
+def replace_punctuation_with_underscore(text):
+    return re.sub(r'\W+', '_', text)
+
+for file_info in files:
+    file_path = file_info.path
+    file_name = replace_punctuation_with_underscore(os.path.basename(file_path).split('.')[0])
+    df = spark.read.format("csv").option("header", "true").load(file_path)
+    df.write.format("delta").mode("overwrite").saveAsTable(f"{schema}.{file_name}")
+    print(f"File {file_name} has been written to Delta table in schema {schema}")
+    spark.sql(f"ANALYZE TABLE {schema}.{file_name} COMPUTE STATISTICS FOR ALL COLUMNS;")
+
+# COMMAND ----------
 
 num_rows = 100
 
