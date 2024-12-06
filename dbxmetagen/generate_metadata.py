@@ -131,27 +131,6 @@ class CommentResponse(Response):
     column_contents: list[str]
 
 
-class DataFrameConverter(ABC):
-    def __init__(self, df, full_table_name):
-        self.df = df
-        self.full_table_name = full_table_name
-        self.pi_input_list = self.convert_to_pi_input()
-        self.comment_input_data = self.convert_to_comment_input()
-
-    def convert_to_pi_input(self) -> Dict[str, Any]:
-        return {
-            "table_name": self.full_table_name,
-            "column_names": self.df.columns,
-            "column_contents": [row.asDict() for row in self.df.collect()]
-        }
-
-    def convert_to_comment_input(self) -> Dict[str, Any]:
-        return {
-            "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='dict')
-        }
-
-
 class PIChatCompletionResponse(ABC):
 
     def get_pi_response(self, content: str, prompt_content: str, model: str):
@@ -184,24 +163,23 @@ class CommentChatCompletionResponse(ABC):
     def convert_to_comment_input(self) -> Dict[str, Any]:
         return {
             "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='dict'),
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
         }
 
     def add_metadata_to_comment_input(self) -> None:
+        print("Adding metadata to comment input...")
         config = self.config
-        print(self.comment_input_data)
-        print(self.comment_input_data['column_contents'])
-        for column_name in self.comment_input_data['column_contents']:
-            print(column_name)
+        column_metadata_dict = {}
+        for column_name in self.comment_input_data['column_contents']['columns']:
             extended_metadata_df = spark.sql(
                 f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
             )            
             filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")            
             column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
             combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            print(combined_metadata)
+            column_metadata_dict[column_name] = combined_metadata
             
-            self.comment_input_data['column_contents'][column_name]['column_metadata'] = combined_metadata
+        self.comment_input_data['column_contents']['column_metadata'] = column_metadata_dict
 
     def get_comment_response(self, 
                              config: MetadataConfig,
@@ -246,7 +224,7 @@ class CommentChatCompletionResponse(ABC):
             raise ValueError(f"JSON decode error: {e}")
 
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not check_list_and_dict_keys_match(content['column_contents'], response_dict['column_names']):
+        if not check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
             raise ValueError("Column names do not match column contents")
 
 
@@ -327,7 +305,13 @@ class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
 
 
 def check_list_and_dict_keys_match(dict_list, string_list):
-    dict_keys = dict_list.keys()
+    if isinstance(dict_list, list):
+        dict_keys = dict_list
+    else:
+        try:
+            dict_keys = dict_list.keys()
+        except: 
+            raise TypeError("dict_list is not a list or a dictionary")
     list_matches_keys = all(item in dict_keys for item in string_list)
     keys_match_list = all(key in string_list for key in dict_keys)
     if not (list_matches_keys and keys_match_list):
@@ -1085,28 +1069,6 @@ display(df)
 
 # COMMAND ----------
 
-df = spark.sql(f"DESCRIBE EXTENDED {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log model")
-display(df)
-df.toPandas().to_dict(orient='list')
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
-
-
-# COMMAND ----------
-
 config = MetadataConfig(**METADATA_PARAMS)
 df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_control")
 display(df)
-
-# COMMAND ----------
-
-
