@@ -6,6 +6,7 @@
 1. If cloned locally, recommend using asset bundle build to create and run a workflow.
 1. Either create a catalog and schema, or use an existing one.
 1. Set the config.py file in dbxmetagen/src to whatever settings you need.
+1. In dbxmetagen/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> as you define your catalog in the config.py file separately. 
 
 ### Current status
 1. Tested on DBR 15.4ML LTS
