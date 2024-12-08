@@ -1,5 +1,7 @@
 # DBX Metadata Generation
 
+See full solution description in `dbxmetagen/generate_metadata.py`
+
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
