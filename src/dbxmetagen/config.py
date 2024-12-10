@@ -1,8 +1,10 @@
+ACRO_CONTENT = "{'DBX': 'Databricks'}"
+
 class MetadataConfig:
     ACRO_CONTENT = {"DBX": "Databricks"}
     SETUP_PARAMS = {
-        "base_url": "https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints",
-        "catalog": "hls_lifesciences",
+        "base_url": "https://adb-830292400663869.9.azuredatabricks.net",
+        "catalog": "dbxmetagen",
         "catalog_tokenizable": "__CATALOG_NAME__", #"__CATALOG_NAME___{{env}}", # __CATALOG_NAME__
         "model": "databricks-meta-llama-3-1-70b-instruct",
         "max_prompt_length": 5000,
@@ -15,7 +17,8 @@ class MetadataConfig:
         "table_names_source": "csv_file_path", #could also use a list of table names in the config
         "source_file_path": "table_names.csv",
         "control_table": "metadata_control",
-        "add_metadata": True        
+        "add_metadata": True,
+        "ddl_application": "ddl" #direct other option
     }
     
     def __init__(self, **kwargs):

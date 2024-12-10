@@ -28,19 +28,6 @@
 
 # COMMAND ----------
 
-# TODO: register a pyfunc so that we can iterate on prompts
-# TODO: Flag for detailed column metrics - null count, min, max, number of values and examples of values.
-# TODO: Separate out table comments into its own Response
-# TODO: Summarizer step for table comments
-# TODO: Improve outputs to improve prompting for Genie
-# TODO: Add async
-# TODO: any utility of agent framework?
-# TODO: Fix input data classes
-# TODO: Move modules out of notebook
-# TODO: whl build
-
-# COMMAND ----------
-
 # MAGIC %pip install pydantic==2.9.2
 
 # COMMAND ----------
@@ -49,31 +36,30 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Add the schema here as `dest_schema` where you'd like your Volume (where the DDL statements are stored) and new tables to be created in. No need to list `table_names` here as they can be defined in config.py
+dbutils.widgets.text("catalog_name", "dbxmetagen")
+dbutils.widgets.text("dest_schema", "metadata_results")
+dbutils.widgets.text("table_names", "")
+dbutils.widgets.text("mode", "comment")
+dbutils.widgets.text("base_url", "comment")
 
 # COMMAND ----------
+catalog_name = dbutils.widgets.get("catalog_name")
+dest_schema = dbutils.widgets.get("dest_schema")
+table_names = dbutils.widgets.get("table_names")
+mode = dbutils.widgets.get("mode")
+base_url = dbutils.widgets.get("base_url")
+
+# COMMAND ----------
+
+### Will be set as instance variables for parameters in the code.
 
 METADATA_PARAMS = {
-    "table_names": [],
-    "dest_schema": "tcga",
-    "mode": "comment"
+    "table_names": table_names,
+    "dest_schema": dest_schema,
+    "mode": mode
     }
-acro_content = "{'DBX': 'Databricks'}"
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Before proceeding, be sure to modify the  dbxmetagen/src/config.py file with your environment variables, catalog, and other config information
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Don't change these unless you know what you are doing and do it intentionally
-
-# COMMAND ----------
-
-#grabbing a temporary API token for you to authenticate to the AI Gateway for LLM usage
+### For authenticating to AI Gateway
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 
 # COMMAND ----------
@@ -101,8 +87,9 @@ import time
 import random
 from abc import ABC
 
-from src.prompts import create_prompt_template
-from src.config import MetadataConfig
+from src.dbxmetagen.sampling import determine_sampling_ratio
+from src.dbxmetagen.prompts import create_prompt_template
+from src.dbxmetagen.config import MetadataConfig
 
 # COMMAND ----------
 
@@ -128,7 +115,7 @@ class Input(BaseModel):
     @classmethod
     def from_df(cls, df: DataFrame) -> Dict[str, Any]:        
         return {
-            "table_name": "{catalog_name}.{schema_name}.{table_name}",
+            "table_name": f"{catalog_name}.{schema_name}.{table_name}",
             "column_contents": cls.df.toPandas().to_dict(orient='list')
         }
 
@@ -543,25 +530,6 @@ def get_extended_metadata_for_column(config, table_name, column_name):
     query = f"""DESCRIBE EXTENDED {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{table_name} {column_name};"""
     return spark.sql(query)
     
-
-def determine_sampling_ratio(nrows: int, sample_size: int) -> float:
-    """
-    Takes a number of rows and a ratio, and returns the number of rows to sample.
-
-    Args:
-        nrows (int): The number of rows in the DataFrame.
-        ratio (int): The ratio to use for sampling to avoid too many rows.
-
-    Returns:
-        ratio (float): The number of rows to sample.
-    """
-    if sample_size < nrows:
-        ratio = sample_size / nrows
-    else:
-        ratio = 1.0        
-    print("Sampling ratio:", ratio)
-    return ratio
-
 
 def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     """
@@ -1012,7 +980,7 @@ def create_volume(config: MetadataConfig) -> None:
     """
     if config.SETUP_PARAMS["volume_name"]:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['volume_name']}")
-
+parsed_document = ParserFactory.create_parser("/Volumes/regn_embed/raw/external_sharepoint_raw/janeways-immunobiology-9th-ed_booksmedicos.org_.pdf").partition()
 
 def create_tables(config: MetadataConfig) -> None:
     """

@@ -19,7 +19,8 @@ transformers = "==4.46.3"
 torchvision = "==0.20.1"
 torch = "==2.5.1"
 pydantic = "==2.9.2"
-
+pytest = "*"
+typing-extensions = "*"
 
 [dev-packages]
 
