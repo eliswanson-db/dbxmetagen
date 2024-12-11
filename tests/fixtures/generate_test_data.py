@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 # COMMAND ----------
 
-schema = "eswanson_genai.default"
+schema = "dbx_metagen.default"
 volume_name = "datasets"
 
 # COMMAND ----------

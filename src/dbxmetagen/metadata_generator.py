@@ -1,88 +1,8 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # GenAI-Assisted Metadata Generation (a.k.a `dbxmetagen`)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC #`dbxmetagen` Overview
-# MAGIC ### This is a utlity to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
-# MAGIC
-# MAGIC While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. 
-# MAGIC
-# MAGIC ###Disclaimer
-# MAGIC AI generated comments are not always accurate and comment DDLs should be reviewed prior to modifying your tables. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. 
-# MAGIC
-# MAGIC ###Solution Overview:
-# MAGIC There are a few key sections in this notebook: 
-# MAGIC - Library installs and setup using the config referenced in `dbxmetagen/src/config.py`
-# MAGIC - Function definitions for:
-# MAGIC   - Retrieving table and column information from the list of tables provided in `table_names.csv`
-# MAGIC   - Sampling data from those tables, with exponential backoff, to help generate more accurate metadata, especially for columns with categorical data, that will also indicate the structure of the data. This is particularly helpful for [Genie](https://www.databricks.com/product/ai-bi/genie). This sampling also checks for nulls.
-# MAGIC   - Use of `Pydantic` to ensure that LLM metadata generation conforms to a particular format. This is also used for DDL generation to ensure that the DDL is always runnable. 
-# MAGIC   - Creation of a log table keeping track of tables read/modified
-# MAGIC   - Creation of DDL scripts, one for each table, that have the DDL commands to `ALTER TABLE` to add comments to table and columns. This is to help integrate with your CI/CD processes, in case you do not have access in a production environment
-# MAGIC - Application of the functions above to generate metadata and DDL for the list of tables provided in `dbxmetagen/table_names.csv` 
-# MAGIC
-# MAGIC
-
-# COMMAND ----------
-
-# TODO: register a pyfunc so that we can iterate on prompts
-# TODO: Flag for detailed column metrics - null count, min, max, number of values and examples of values.
-# TODO: Separate out table comments into its own Response
-# TODO: Summarizer step for table comments
-# TODO: Improve outputs to improve prompting for Genie
-# TODO: Add async
-# TODO: any utility of agent framework?
-# TODO: Fix input data classes
-# TODO: Move modules out of notebook
-# TODO: whl build
-
-# COMMAND ----------
-
-# MAGIC %pip install pydantic==2.9.2
-
-# COMMAND ----------
-
-dbutils.library.restartPython()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Add the schema here as `dest_schema` where you'd like your Volume (where the DDL statements are stored) and new tables to be created in. No need to list `table_names` here as they can be defined in config.py
-
-# COMMAND ----------
-
-METADATA_PARAMS = {
-    "table_names": [],
-    "dest_schema": "tcga",
-    "mode": "comment"
-    }
-acro_content = "{'DBX': 'Databricks'}"
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Before proceeding, be sure to modify the  dbxmetagen/src/config.py file with your environment variables, catalog, and other config information
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Don't change these unless you know what you are doing and do it intentionally
-
-# COMMAND ----------
-
-#grabbing a temporary API token for you to authenticate to the AI Gateway for LLM usage
-api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-
-# COMMAND ----------
-
-#library imports
+from abc import ABC
+from pydantic.dataclasses import dataclass
 from pydantic import BaseModel, Field, Extra, ValidationError, ConfigDict
 from openai import OpenAI
 import os
-from pydantic.dataclasses import dataclass
 from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 import json
@@ -99,350 +19,11 @@ import mlflow
 from pyspark.sql.functions import lit
 import time
 import random
-from abc import ABC
-
-from src.prompts import create_prompt_template
-from src.config import MetadataConfig
-
-# COMMAND ----------
-
-os.environ["DATABRICKS_TOKEN"]=api_key
-os.environ["DATABRICKS_HOST"]=MetadataConfig.SETUP_PARAMS['base_url']
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## The functions used to retrieve table information, do sampling on the columns, generate structured metadata, generate the DDL, validate that a Volume exists and create if not, and other utilities are all defined here
-
-# COMMAND ----------
-
-class DDLGenerator(ABC):
-    def __init__(self):
-        pass
-
-class Input(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    table_name: str
-
-    @classmethod
-    def from_df(cls, df: DataFrame) -> Dict[str, Any]:        
-        return {
-            "table_name": "{catalog_name}.{schema_name}.{table_name}",
-            "column_contents": cls.df.toPandas().to_dict(orient='list')
-        }
-
-class PInput(Input):
-    
-    column_contents: List[Dict[str, Any]]
-
-
-class CommentInput(Input):
-    
-    column_contents: List[List[Any]]
-
-
-class Response(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    table: str
-    column_names: List[str]
-
-    
-class PIResponse(Response):
-    model_config = ConfigDict(extra="forbid")
-
-    column_contents: list[dict[str, Any]]
-
-
-class CommentResponse(Response):
-    model_config = ConfigDict(extra="forbid")
-
-    column_contents: list[str]
-
-
-class PIChatCompletionResponse(ABC):
-
-    def get_pi_response(self, content: str, prompt_content: str, model: str):
-        chat_completion = get_response(content, prompt_content, model)
-        response_payload = chat_completion.choices[0].message
-        response = response_payload.content
-        retries = 0
-        try:            
-            response_dict = json.loads(response)
-            if not isinstance(response_dict, dict):
-                raise ValueError("columns field is not a valid dict")
-            chat_response = PIResponse(**response_dict)
-            return chat_response, response_payload
-        except (ValidationError, json.JSONDecodeError, AttributeError) as e:
-            retries+=1
-            raise ValueError(f"Validation error: {e} {response}")
-            return None
-
-# TODO: change ChatCompletionResponse to a factory 
-class CommentChatCompletionResponse(ABC):
-    def __init__(self, config, df, full_table_name):
-        self.config = config
-        self.df = df
-        self.full_table_name = full_table_name
-        self.comment_input_data = self.convert_to_comment_input()
-        if self.config.SETUP_PARAMS.get('add_metadata'):
-            self.add_metadata_to_comment_input()
-        print("Instantiating chat completion response...")
-
-    def convert_to_comment_input(self) -> Dict[str, Any]:
-        return {
-            "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='split'),
-        }
-
-    def add_metadata_to_comment_input(self) -> None:
-        print("Adding metadata to comment input...")
-        config = self.config
-        column_metadata_dict = {}
-        for column_name in self.comment_input_data['column_contents']['columns']:
-            extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
-            )            
-            filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")            
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            column_metadata_dict[column_name] = combined_metadata
-            
-        self.comment_input_data['column_contents']['column_metadata'] = column_metadata_dict
-
-    def get_comment_response(self, 
-                             config: MetadataConfig,
-                             content: str, 
-                             prompt_content: str, 
-                             model: str, 
-                             max_tokens: int, 
-                             temperature: float,
-                             retries: int = 0, 
-                             max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
-        try:
-            chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
-            response_payload = chat_completion.choices[0].message
-            response_dict = self._parse_response(response_payload.content)
-            self._validate_response(content, response_dict)
-            chat_response = CommentResponse(**response_dict)
-            return chat_response, response_payload
-        except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
-            if retries < max_retries:
-                print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
-                return self.get_comment_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
-            else:
-                print("Validation error - response")
-                raise ValueError(f"Validation error after {max_retries} attempts: {e}")
-
-    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
-        client = OpenAI(api_key=os.environ['DATABRICKS_TOKEN'], base_url=config.SETUP_PARAMS['base_url'])
-        try:
-            return client.chat.completions.create(
-                messages=prompt_content,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature
-            )
-        except Exception as e:
-            if retries < max_retries:
-                print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
-                exponential_backoff(retries)
-                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
-            else:
-                print(f"Failed after {max_retries} retries.")
-                raise e
-
-    def _parse_response(self, response: str) -> Dict[str, Any]:
-        try:
-            response_dict = json.loads(response)
-            if not isinstance(response_dict, dict):
-                raise ValueError("Response is not a valid dict")
-            return response_dict
-        except json.JSONDecodeError as e:
-            raise ValueError(f"JSON decode error: {e}")
-
-    def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
-            raise ValueError("Column names do not match column contents")
-    
-    @staticmethod
-    def _check_list_and_dict_keys_match(dict_list, string_list):
-        if isinstance(dict_list, list):
-            dict_keys = dict_list
-        else:
-            try:
-                dict_keys = dict_list.keys()
-            except: 
-                raise TypeError("dict_list is not a list or a dictionary")
-        list_matches_keys = all(item in dict_keys for item in string_list)
-        keys_match_list = all(key in string_list for key in dict_keys)
-        if not (list_matches_keys and keys_match_list):
-            return False
-        return True
-
-
-
-class MetadataGenerator(mlflow.pyfunc.ChatModel, CommentChatCompletionResponse, ABC):
-    def __init__(self):
-        pass
-
-    @classmethod
-    def from_context(cls, context: mlflow.pyfunc.PythonModelContext):
-        chat = cls.__new__(cls)
-        return chat
-    
-    @staticmethod
-    def _format_prompt(prompt, content, acro_content):
-        return create_prompt_template(prompt, content, acro_content)
-
-    def get_openai_client(self):
-       return OpenAI(
-           api_key=os.environ["DATABRICKS_TOKEN"],
-           base_url=os.environ["DATABRICKS_HOST"] + "serving-endpoints")
-
-    def load_context(self, context):
-        """Instantiated OpenAI client cannot be added to load_context.
-        """
-        self.api_key = context.artifacts["api_key"]
-        self.base_url = context.artifacts["base_url"]
-
-    def predict(self, context, messages):
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        prompt = self.create_prompt(messages)
-        response = self.client.chat.completions.create(
-            messages=prompt,
-            model=context.get("model", "default-model"),
-            max_tokens=context.get("max_tokens", 3000),
-            temperature=context.get("temperature", 0.1)
-        )
-        text = response.choices[0].message["content"]
-
-        prompt_tokens = len(self.client.tokenizer.encode(prompt))
-        completion_tokens = len(self.client.tokenizer.encode(text))
-        usage = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
-        
-        # Construct the response
-        chat_response = {
-            "id": f"response_{random.randint(0, 100)}",
-            "model": "MyChatModel",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": usage,
-        }
-        
-        return ChatResponse(**chat_response)
-
-    def create_prompt(self, messages):
-        # Convert the list of messages to the format expected by the OpenAI API
-        return [{"role": message["role"], "content": message["content"]} for message in messages]
-
-
-class CommentGenerator(MetadataGenerator, CommentChatCompletionResponse):
-    def __init__(self):
-        pass
-
-
-class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
-    def __init__(self):
-        pass
-
-# COMMAND ----------
-
-def get_response(config, content: str, prompt_content: str, model: str, max_tokens: str, temperature: str):
-    client = OpenAI(
-        api_key=os.environ['DATABRICKS_TOKEN'],
-        base_url=config.SETUP_PARAMS['base_url']
-    )
-    chat_completion = client.chat.completions.create(
-        messages=prompt_content,
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature
-    )
-    return chat_completion
-
-
-def exponential_backoff(retries, base_delay=1, max_delay=120, jitter=True):
-    """
-    Exponential backoff with optional jitter.
-    
-    :param retries: Number of retries attempted.
-    :param base_delay: Initial delay in seconds.
-    :param max_delay: Maximum delay in seconds.
-    :param jitter: Whether to add random jitter to the delay.
-    :return: None
-    """
-    delay = min(base_delay * (2 ** retries), max_delay)
-    if jitter:
-        delay = delay / 2 + random.uniform(0, delay / 2)
-    time.sleep(delay)
-
-
-def get_responses(chat_response,
-                  config: MetadataConfig) -> Tuple[PIResponse, CommentResponse]:
-    print("Getting responses...")
-    pi_input_list = None # Hard coding this until full factory is setup.
-    responses = {'pi': None, 'comment': None}
-    if config.mode == "pi":
-        prompt_template = create_prompt_template(pi_input_list, config.SETUP_PARAMS['acro_content'])
-        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
-            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        pi_response, message_payload = chat_response.get_pi_response(content=pi_input_list, 
-                                                                                  prompt_content=prompt_template['pi'],
-                                                                                  model=config.SETUP_PARAMS['model'], 
-                                                                                  max_tokens=config.SETUP_PARAMS['max_tokens'], 
-                                                                                  temperature=config.SETUP_PARAMS['temperature'])
-        responses.append(pi_response)
-        responses['pi'] = pi_response
-    elif config.mode == "comment":
-        prompt_template = create_prompt_template(chat_response.comment_input_data, config.SETUP_PARAMS['acro_content'])
-        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
-            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        comment_response, message_payload = chat_response.get_comment_response(config, content=chat_response.comment_input_data, 
-                                                                                                 prompt_content=prompt_template['comment'], 
-                                                                                                 model=config.SETUP_PARAMS['model'], 
-                                                                                                 max_tokens=config.SETUP_PARAMS['max_tokens'], 
-                                                                                                 temperature=config.SETUP_PARAMS['temperature'])
-        responses['comment'] = comment_response
-    else: 
-        if config.mode not in ["pi", "comment"]:
-                raise ValueError("To be valid, mode must be 'pi' or 'comment'.")
-    return responses
-
-
-def tag_table(table_name: str, tags: Dict[str, str]) -> None:
-    """
-    Tags a table with the provided tags.
-
-    Args:
-        table_name (str): The name of the table to tag.
-        tags (Dict[str, str]): A dictionary of tags to apply to the table.
-    """
-    for key, value in tags.items():
-        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('{key}' = '{value}');")
-
-
-def write_to_log_table(log_data: Dict[str, Any], log_table_name: str) -> None:
-    """
-    Writes log data to a specified log table.
-
-    Args:
-        log_data (Dict[str, Any]): The log data to write.
-        log_table_name (str): The name of the log table.
-    """
-    log_df = spark.createDataFrame([log_data])
-    log_df.write.format("delta").mode("append").saveAsTable(log_table_name)
-
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf
+from src.dbxmetagen.config import MetadataConfig
+from src.dbxmetagen.sampling import determine_sampling_ratio
+from src.dbxmetagen.prompts import create_prompt_template
 
 @udf
 def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
@@ -509,6 +90,322 @@ def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, 
     ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET TAGS ('has_pi' = '{pi_type}');"
     return ddl_statement
 
+class DDLGenerator(ABC):
+    def __init__(self):
+        pass
+
+class Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table_name: str
+
+    @classmethod
+    def from_df(cls, df: DataFrame) -> Dict[str, Any]:        
+        return {
+            "table_name": f"{catalog_name}.{schema_name}.{table_name}",
+            "column_contents": cls.df.toPandas().to_dict(orient='list')
+        }
+
+class PInput(Input):
+    
+    column_contents: List[Dict[str, Any]]
+
+
+class CommentInput(Input):
+    
+    column_contents: List[List[Any]]
+
+
+class Response(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: str
+    column_names: List[str]
+
+    
+class PIResponse(Response):
+    model_config = ConfigDict(extra="forbid")
+
+    column_contents: list[dict[str, Any]]
+
+
+class CommentResponse(Response):
+    model_config = ConfigDict(extra="forbid")
+
+    column_contents: list[str]
+
+
+class PIChatCompletionResponse(ABC):
+
+    def get_pi_response(self, content: str, prompt_content: str, model: str):
+        chat_completion = get_response(content, prompt_content, model)
+        response_payload = chat_completion.choices[0].message
+        response = response_payload.content
+        retries = 0
+        try:            
+            response_dict = json.loads(response)
+            if not isinstance(response_dict, dict):
+                raise ValueError("columns field is not a valid dict")
+            chat_response = PIResponse(**response_dict)
+            return chat_response, response_payload
+        except (ValidationError, json.JSONDecodeError, AttributeError) as e:
+            retries+=1
+            raise ValueError(f"Validation error: {e} {response}")
+            return None
+
+# TODO: change ChatCompletionResponse to a factory 
+class CommentChatCompletionResponse(ABC):
+    def __init__(self, config, df, full_table_name):
+        self.config = config
+        self.df = df
+        self.full_table_name = full_table_name
+        self.comment_input_data = self.convert_to_comment_input()
+        if self.config.add_metadata:
+            self.add_metadata_to_comment_input()
+        print("Instantiating chat completion response...")
+
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        print("Adding metadata to comment input...")
+        spark = SparkSession.builder.getOrCreate()
+        config = self.config
+        column_metadata_dict = {}
+        for column_name in self.comment_input_data['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")            
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+            
+        self.comment_input_data['column_contents']['column_metadata'] = column_metadata_dict
+
+    def get_comment_response(self, 
+                             config: MetadataConfig,
+                             content: str, 
+                             prompt_content: str, 
+                             model: str, 
+                             max_tokens: int, 
+                             temperature: float,
+                             retries: int = 0, 
+                             max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
+        try:
+            chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+            response_payload = chat_completion.choices[0].message
+            response_dict = self._parse_response(response_payload.content)
+            self._validate_response(content, response_dict)
+            chat_response = CommentResponse(**response_dict)
+            return chat_response, response_payload
+        except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
+            if retries < max_retries:
+                print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
+                return self.get_comment_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+            else:
+                print("Validation error - response")
+                raise ValueError(f"Validation error after {max_retries} attempts: {e}")
+
+    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
+        base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints"
+        client = OpenAI(api_key=os.environ['DATABRICKS_TOKEN'], base_url=base_url)
+        try:
+            return client.chat.completions.create(
+                messages=prompt_content,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        except Exception as e:
+            if retries < max_retries:
+                print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
+                exponential_backoff(retries)
+                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+            else:
+                print(f"Failed after {max_retries} retries.")
+                raise e
+
+    def _parse_response(self, response: str) -> Dict[str, Any]:
+        try:
+            response_dict = json.loads(response)
+            if not isinstance(response_dict, dict):
+                raise ValueError("Response is not a valid dict")
+            return response_dict
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSON decode error: {e}")
+
+    def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
+        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
+            raise ValueError("Column names do not match column contents")
+    
+    @staticmethod
+    def _check_list_and_dict_keys_match(dict_list, string_list):
+        if isinstance(dict_list, list):
+            dict_keys = dict_list
+        else:
+            try:
+                dict_keys = dict_list.keys()
+            except: 
+                raise TypeError("dict_list is not a list or a dictionary")
+        list_matches_keys = all(item in dict_keys for item in string_list)
+        keys_match_list = all(key in string_list for key in dict_keys)
+        if not (list_matches_keys and keys_match_list):
+            return False
+        return True
+
+
+
+class MetadataGenerator(mlflow.pyfunc.ChatModel, CommentChatCompletionResponse, ABC):
+    def __init__(self):
+        pass
+
+    @classmethod
+    def from_context(cls, context: mlflow.pyfunc.PythonModelContext):
+        chat = cls.__new__(cls)
+        return chat
+    
+    @staticmethod
+    def _format_prompt(prompt, content, acro_content):
+        return create_prompt_template(prompt, content, acro_content)
+
+    def get_openai_client(self):
+       return OpenAI(
+           api_key=os.environ["DATABRICKS_TOKEN"],
+           base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
+
+    def load_context(self, context):
+        """Instantiated OpenAI client cannot be added to load_context.
+        """
+        self.api_key = context.artifacts["api_key"]
+        self.base_url = context.artifacts["base_url"]
+
+    def predict(self, context, messages):
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        prompt = self.create_prompt(messages)
+        response = self.client.chat.completions.create(
+            messages=prompt,
+            model=context.get("model", "default-model"),
+            max_tokens=context.get("max_tokens", 3000),
+            temperature=context.get("temperature", 0.1)
+        )
+        text = response.choices[0].message["content"]
+
+        prompt_tokens = len(self.client.tokenizer.encode(prompt))
+        completion_tokens = len(self.client.tokenizer.encode(text))
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        
+        # Construct the response
+        chat_response = {
+            "id": f"response_{random.randint(0, 100)}",
+            "model": "MyChatModel",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": usage,
+        }
+        
+        return ChatResponse(**chat_response)
+
+    def create_prompt(self, messages):
+        # Convert the list of messages to the format expected by the OpenAI API
+        return [{"role": message["role"], "content": message["content"]} for message in messages]
+
+
+class CommentGenerator(MetadataGenerator, CommentChatCompletionResponse):
+    def __init__(self):
+        pass
+
+
+class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
+    def __init__(self):
+        pass
+
+
+def get_response(config, content: str, prompt_content: str, model: str, max_tokens: str, temperature: str):
+    client = OpenAI(
+        api_key=os.environ['DATABRICKS_TOKEN'],
+        base_url=config.base_url
+    )
+    chat_completion = client.chat.completions.create(
+        messages=prompt_content,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature
+    )
+    return chat_completion
+
+
+def get_responses(chat_response,
+                  config: MetadataConfig) -> Tuple[PIResponse, CommentResponse]:
+    print("Getting responses...")
+    pi_input_list = None # Hard coding this until full factory is setup.
+    responses = {'pi': None, 'comment': None}
+    if config.mode == "pi":
+        prompt_template = create_prompt_template(pi_input_list, config.acro_content)
+        if len(prompt_template) > config.max_prompt_length:
+            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
+        pi_response, message_payload = chat_response.get_pi_response(content=pi_input_list, 
+                                                                                  prompt_content=prompt_template['pi'],
+                                                                                  model=config.model, 
+                                                                                  max_tokens=config.max_tokens, 
+                                                                                  temperature=config.temperature)
+        responses.append(pi_response)
+        responses['pi'] = pi_response
+    elif config.mode == "comment":
+        prompt_template = create_prompt_template(chat_response.comment_input_data, config.acro_content)
+        if len(prompt_template) > config.max_prompt_length:
+            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
+        comment_response, message_payload = chat_response.get_comment_response(config, content=chat_response.comment_input_data, 
+                                                                                                 prompt_content=prompt_template['comment'], 
+
+                                                                                                 model=config.model, 
+                                                                                                 max_tokens=config.max_tokens, 
+                                                                                                 temperature=config.temperature)
+        responses['comment'] = comment_response
+    else: 
+        if config.mode not in ["pi", "comment"]:
+                raise ValueError("To be valid, mode must be 'pi' or 'comment'.")
+    return responses
+
+
+def tag_table(table_name: str, tags: Dict[str, str]) -> None:
+    """
+    Tags a table with the provided tags.
+
+    Args:
+        table_name (str): The name of the table to tag.
+        tags (Dict[str, str]): A dictionary of tags to apply to the table.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    for key, value in tags.items():
+        spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('{key}' = '{value}');")
+
+
+def write_to_log_table(log_data: Dict[str, Any], log_table_name: str) -> None:
+    """
+    Writes log data to a specified log table.
+
+    Args:
+        log_data (Dict[str, Any]): The log data to write.
+        log_table_name (str): The name of the log table.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    log_df = spark.createDataFrame([log_data])
+    log_df.write.format("delta").mode("append").saveAsTable(log_table_name)
+
+
 
 def count_df_columns(df):
     return len(df.columns)
@@ -539,28 +436,10 @@ def chunk_df(df: DataFrame, columns_per_call: int = 5) -> List[DataFrame]:
 
 
 def get_extended_metadata_for_column(config, table_name, column_name):
-    query = f"""DESCRIBE EXTENDED {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{table_name} {column_name};"""
+    spark = SparkSession.builder.getOrCreate()
+    query = f"""DESCRIBE EXTENDED {config.catalog}.{config.dest_schema}.{table_name} {column_name};"""
     return spark.sql(query)
     
-
-def determine_sampling_ratio(nrows: int, sample_size: int) -> float:
-    """
-    Takes a number of rows and a ratio, and returns the number of rows to sample.
-
-    Args:
-        nrows (int): The number of rows in the DataFrame.
-        ratio (int): The ratio to use for sampling to avoid too many rows.
-
-    Returns:
-        ratio (float): The number of rows to sample.
-    """
-    if sample_size < nrows:
-        ratio = sample_size / nrows
-    else:
-        ratio = 1.0        
-    print("Sampling ratio:", ratio)
-    return ratio
-
 
 def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     """
@@ -572,7 +451,7 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
         sample_size (int): The number of rows to sample.
     
     Returns:
-        DataFrame: A DataFrame with columns indicating potential PII.
+        DataFrame: A DataFrame with columns to generate metadata for.
     """
     if nrows < sample_size:
         print(f"Not enough rows for a proper sample. Continuing with inference with {nrows} rows...")
@@ -580,19 +459,19 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     larger_sample = sample_size * 100
     sampling_ratio = determine_sampling_ratio(nrows, larger_sample)
     sampled_df = df.sample(withReplacement=False, fraction=sampling_ratio)
-    print("nrows of sampled df", sampled_df.count())
+    length_of_chunk = sampled_df.columns.__len__()
+    n_null_cols = sum(sampled_df[col].isNull().cast("int") for col in sampled_df.columns)
+    print("nrows of sampled df...", sampled_df.count())
+    print("len of n cols", length_of_chunk)
+    print("n null cols", n_null_cols)
     threshold = int(sampled_df.columns.__len__() * 0.5)
     print("threshold", threshold)
-    # TODO: change len to function not dunder method
-    filtered_df = sampled_df.filter(sampled_df.columns.__len__() - sum(sampled_df[col].isNull().cast("int")
-                                                                       for col in sampled_df.columns) >= threshold
-                                    )
+    filtered_df = sampled_df.filter(length_of_chunk - n_null_cols >= threshold)
     result_rows = filtered_df.count()
     print("result rows", result_rows)
 
     if result_rows < sample_size:
-        print("Not enough non-NULL rows:", result_rows, "vs", sample_size)
-        print("Returning available rows, despite large proportion of NULLs")
+        print("Not enough non-NULL rows, returning available rows, despite large proportion of NULLs:", result_rows, "vs", sample_size)
         return df.limit(sample_size)
     
     print(f"Filtering {result_rows} rows down to {sample_size} rows...")
@@ -670,6 +549,7 @@ def rows_to_df(rows: List[Row]) -> DataFrame:
     Returns:
         DataFrame: The Spark DataFrame created from the list of rows.
     """
+    spark = SparkSession.builder.getOrCreate()
     return spark.createDataFrame(rows)
 
 
@@ -722,6 +602,7 @@ def get_current_user() -> str:
     Returns:
         str: The current user.
     """
+    spark = SparkSession.builder.getOrCreate()
     return spark.sql("SELECT current_user()").collect()[0][0]
 
 
@@ -753,11 +634,11 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
 
 def populate_log_table(df, config, current_user, base_path):
         return (df.withColumn("current_user", lit(current_user))
-          .withColumn("model", lit(config.SETUP_PARAMS['model']))
-          .withColumn("sample_size", lit(config.SETUP_PARAMS['sample_size']))
-          .withColumn("max_tokens", lit(config.SETUP_PARAMS['max_tokens']))
-          .withColumn("temperature", lit(config.SETUP_PARAMS['temperature']))
-          .withColumn("columns_per_call", lit(config.SETUP_PARAMS['columns_per_call']))
+          .withColumn("model", lit(config.model))
+          .withColumn("sample_size", lit(config.sample_size))
+          .withColumn("max_tokens", lit(config.max_tokens))
+          .withColumn("temperature", lit(config.temperature))
+          .withColumn("columns_per_call", lit(config.columns_per_call))
           .withColumn("status", lit("No Volume specified..."))
         )
 
@@ -770,8 +651,9 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         table_name (str): The name of the table to update.
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
+    spark = SparkSession.builder.getOrCreate()
     print(table_name)
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
     print(control_table)
     update_query = f"""
     UPDATE {control_table}
@@ -785,7 +667,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
 
 
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:   
-    df.write.mode('append').saveAsTable(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log")
+    df.write.mode('append').saveAsTable(f"{config.catalog}.{config.dest_schema}.metadata_generation_log")
     mark_as_deleted(table_name, config)
 
 
@@ -865,8 +747,8 @@ def create_and_persist_ddl(df: DataFrame,
     print("Running create and persist ddl...")
     current_user = get_current_user()
     current_date = datetime.now().strftime('%Y%m%d')
-    if config.SETUP_PARAMS['volume_name']:
-        base_path = f"/Volumes/{config.SETUP_PARAMS['catalog']}/{config.dest_schema}/{config.SETUP_PARAMS['volume_name']}/{current_user}/{current_date}"
+    if config.volume_name:
+        base_path = f"/Volumes/{config.catalog}/{config.dest_schema}/{config.volume_name}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
         table_df = populate_log_table(table_df, config, current_user, base_path)
@@ -904,12 +786,13 @@ def get_generated_metadata(
     Returns:
         List[Dict[str, Any]]: A list of dictionaries containing the generated metadata.
     """
+    spark = SparkSession.builder.getOrCreate()
     df = spark.read.table(full_table_name)
     nrows = df.count()
-    chunked_dfs = chunk_df(df, config.SETUP_PARAMS['columns_per_call'])
+    chunked_dfs = chunk_df(df, config.columns_per_call)
     responses = []
     for chunk in chunked_dfs:
-        sampled_chunk = sample_df(chunk, nrows, config.SETUP_PARAMS['sample_size'])
+        sampled_chunk = sample_df(chunk, nrows, config.sample_size)
         chat_response = CommentChatCompletionResponse(config, sampled_chunk, full_table_name)
         response = get_responses(chat_response, config)
         responses.append(response)
@@ -962,7 +845,7 @@ def replace_catalog_name(config, full_table_name):
     Returns:
         str: The string with the catalog name replaced.
     """
-    catalog_tokenizable = config.SETUP_PARAMS['catalog_tokenizable']
+    catalog_tokenizable = config.catalog_tokenizable
     catalog_name = full_table_name.split('.')[0]
     
     return catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
@@ -999,7 +882,7 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     return dfs
 
 
-def create_volume(config: MetadataConfig) -> None:
+def ddl(config: MetadataConfig) -> None:
     """
     Creates a schema volume if it does not already exist.
 
@@ -1009,9 +892,12 @@ def create_volume(config: MetadataConfig) -> None:
             - dest_schema (str): The destination schema name.
             - volume_name (str): The volume name.
     """
-    if config.SETUP_PARAMS["volume_name"]:
-        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['volume_name']}")
+    spark = SparkSession.builder.getOrCreate()
+    if config.dest_schema:
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog}.{config.dest_schema}")
 
+    if config.volume_name:
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.volume_name}")
 
 def create_tables(config: MetadataConfig) -> None:
     """
@@ -1023,8 +909,9 @@ def create_tables(config: MetadataConfig) -> None:
             - dest_schema (str): The destination schema name.
             - control_table (str): The volume name.
     """
-    if config.SETUP_PARAMS["control_table"]:
-        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+    spark = SparkSession.builder.getOrCreate()
+    if config.control_table:
+        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
 
 def generate_and_persist_comments(config) -> None:
@@ -1052,15 +939,17 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     Returns:
         List[str]: A list of table names.
     """
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    spark = SparkSession.builder.getOrCreate()
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
         queued_table_names = {row["table_name"] for row in control_df.collect()}
     config_table_names = config.table_names
-    file_table_names = load_table_names_from_csv(config.SETUP_PARAMS['source_file_path'])
+    file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
-    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.SETUP_PARAMS['catalog'])
+    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog)
+    print("Combined table names", combined_table_names)
     return combined_table_names
 
 
@@ -1095,9 +984,10 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
         table_names (List[str]): A list of table names to upsert.
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
-    print("Upserting table names to control table {table_names}...")
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
-    table_names = ensure_fully_scoped_table_names(table_names, config.SETUP_PARAMS['catalog'])
+    print(f"Upserting table names to control table {table_names}...")
+    spark = SparkSession.builder.getOrCreate()
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
+    table_names = ensure_fully_scoped_table_names(table_names, config.catalog)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
     existing_df = spark.read.table(control_table)
     new_table_names_df = table_names_df.join(existing_df, on="table_name", how="left_anti") \
@@ -1111,44 +1001,24 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
 
 
 def load_table_names_from_csv(csv_file_path):
-    print(csv_file_path)
+    spark = SparkSession.builder.getOrCreate()
     df_tables = spark.read.csv(f"file://{os.path.join(os.getcwd(), csv_file_path)}", header=True)    
     table_names = [row["table_name"] for row in df_tables.select("table_name").collect()]
     return table_names
+    
 
+def split_table_names(table_names: str) -> List[str]:
+    if not table_names:
+        return []
+    return table_names.split(',')
 
 def main(metadata_params):
     config = MetadataConfig(**metadata_params)
-    print(config.SETUP_PARAMS['columns_per_call'])
-    create_volume(config)
+    print(config.columns_per_call)
+    ddl(config)
     create_tables(config)
     queue = setup_queue(config)
-    if config.SETUP_PARAMS['control_table']:
+    if config.control_table:
         upsert_table_names_to_control_table(queue, config)
     config.table_names.extend(queue)
     generate_and_persist_comments(config)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Now run the code - this may take some time depending on how many tables/columns you are running and what your tokens/sec throughput on the LLM is. 
-
-# COMMAND ----------
-
-main(METADATA_PARAMS)
-
-# COMMAND ----------
-
-config = MetadataConfig(**METADATA_PARAMS)
-df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log").orderBy(col('_created_at').desc())
-display(df)
-
-# COMMAND ----------
-
-config = MetadataConfig(**METADATA_PARAMS)
-df = spark.read.table(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_control")
-display(df)
-
-# COMMAND ----------
-
-#spark.sql(f"DROP TABLE {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_control")

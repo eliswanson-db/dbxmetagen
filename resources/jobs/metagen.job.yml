@@ -9,12 +9,21 @@ resources:
 
       tasks:
         - task_key: notebook_task
-          job_cluster_key: job_cluster
+          job_cluster_key: metadata_generator_cluster
           notebook_task:
-            notebook_path: ../../dbxmetagen/generate_metadata.py
-        
+            notebook_path: ../../notebooks/generate_metadata.py
+          libraries:
+            - whl: ../../dist/*.whl
+        - task_key: wheel_task
+          job_cluster_key: metadata_generator_cluster
+          python_wheel_task:
+            entry_point: main
+            package_name: dbxmetagen
+          libraries:
+            - whl: ../../dist/*.whl
+
       job_clusters:
-        - job_cluster_key: job_cluster
+        - job_cluster_key: metadata_generator_cluster
           new_cluster:
             spark_version: 15.4.x-cpu-ml-scala2.12
             node_type_id: Standard_D3_v2

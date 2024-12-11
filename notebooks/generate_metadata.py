@@ -1,5 +1,5 @@
-# DBX Metadata Generation
-
+# Databricks notebook source
+# MAGIC %md
 # MAGIC # GenAI-Assisted Metadata Generation (a.k.a `dbxmetagen`)
 
 # COMMAND ----------
@@ -28,39 +28,66 @@
 
 # COMMAND ----------
 
-# TODO: register a pyfunc so that we can iterate on prompts
-# TODO: Flag for detailed column metrics - null count, min, max, number of values and examples of values.
-# TODO: Separate out table comments into its own Response
-# TODO: Summarizer step for table comments
-# TODO: Improve outputs to improve prompting for Genie
-# TODO: Add async
-# TODO: any utility of agent framework?
-# TODO: Fix input data classes
-# TODO: Move modules out of notebook
-# TODO: whl build
+# MAGIC %pip install -U pydantic==2.9.2
 
-### Setup
-1. Clone the Repo into Databricks or locally
-1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
-1. If cloned locally, recommend using asset bundle build to create and run a workflow.
-1. Either create a catalog and schema, or use an existing one.
-1. Set the config.py file in src/dbxmetagen to whatever settings you need.
-1. In src/dbxmetagen/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> as you define your catalog in the config.py file separately. 
+# COMMAND ----------
 
-### Current status
-1. Tested on DBR 15.4ML LTS
-1. Currently creates ALTER scripts and puts in a volume. Tested in a databricks workspace.
-1. Some print-based logging to make understanding what's happening and debugging easy in the UI
+dbutils.library.restartPython()
 
-### Discussion points:
-1. Throttling - the PPT endpoints will throttle eventually. Likely this will occur wehn running backfills.
-1. Sampling - setting a reasonable sample size for data will serve to provide input from column contents without leading to swamping of column names.
-1. Chunking - running a smaller number of columns at once will result in more attention paid and more tokens PER column but will probably cost slightly more and take longer.
-1. One of the easiest ways to speed this up and get terser answers is to ramp up the columns per call - compare 5 and 50 for example.
+# COMMAND ----------
 
-### Future Items
-1. Adjust prompts and few-shot examples to reduce errors
-1. Add a retry for get_response with a double injection reminder to only respond with the provided schema.
-1. Register as a UC model to allow tracking and iteration of prompts
-1. Expand detail in audit logs
-1. Change table comment generation to use the table name and be longer
+from src.dbxmetagen.prompts import create_prompt_template
+from src.dbxmetagen.config import MetadataConfig
+from src.dbxmetagen.metadata_generator import *
+from src.dbxmetagen.error_handling import exponential_backoff
+
+# COMMAND ----------
+
+dbutils.widgets.text("catalog_name", "dbxmetagen")
+dbutils.widgets.text("dest_schema", "metadata_results")
+dbutils.widgets.text("table_names", "")
+dbutils.widgets.text("mode", "comment")
+dbutils.widgets.text("base_url", "https://adb-830292400663869.9.azuredatabricks.net")
+
+# COMMAND ----------
+
+catalog_name = dbutils.widgets.get("catalog_name")
+dest_schema = dbutils.widgets.get("dest_schema")
+table_names = split_table_names(dbutils.widgets.get("table_names"))
+mode = dbutils.widgets.get("mode")
+base_url = dbutils.widgets.get("base_url")
+
+# COMMAND ----------
+
+### Set instance variables as needed.
+### Variables set in the config will be overridden by the values passed in the notebook through widgets.
+
+METADATA_PARAMS = {
+    "table_names": table_names
+    }
+if catalog_name != "":
+    METADATA_PARAMS["catalog_name"] = catalog_name
+if dest_schema != "":
+    METADATA_PARAMS["dest_schema"] = dest_schema
+if mode != "":
+    METADATA_PARAMS["mode"] = mode
+if base_url != "":
+    METADATA_PARAMS["base_url"] = base_url
+    os.environ["DATABRICKS_HOST"] = base_url
+else:
+    os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
+
+# COMMAND ----------
+
+### For authenticating to AI Gateway
+api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+os.environ["DATABRICKS_TOKEN"]=api_key
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Now run the code - this may take some time depending on how many tables/columns you are running and what your tokens/sec throughput on the LLM is. 
+
+# COMMAND ----------
+
+main(METADATA_PARAMS)

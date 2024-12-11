@@ -18,4 +18,6 @@ print(f'"{current_directory}/deploy.sh" "{current_directory}"')
 
 # COMMAND ----------
 
-
+# MAGIC %sh 
+# MAGIC curl -sSL https://install.python-poetry.org | python3 -
+# MAGIC export PATH="/root/.local/bin:$PATH"
