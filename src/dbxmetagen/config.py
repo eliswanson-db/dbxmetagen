@@ -1,5 +1,4 @@
 ACRO_CONTENT = "{'DBX': 'Databricks'}"
-
 class MetadataConfig:
     ACRO_CONTENT = {"DBX": "Databricks"}
     SETUP_PARAMS = {
@@ -10,7 +9,7 @@ class MetadataConfig:
         "max_prompt_length": 5000,
         "volume_name": "generated_metadata",
         "acro_content": ACRO_CONTENT,
-        "columns_per_call": 5,
+        "columns_per_call": 100,
         "sample_size": 10,
         "max_tokens": 5000,
         "temperature": 0.1,
