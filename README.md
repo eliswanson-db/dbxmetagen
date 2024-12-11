@@ -24,7 +24,7 @@ There are a few key sections in this notebook:
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
-  1.1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
+1. 1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
 1. If cloned locally, recommend using asset bundle build to create and run a workflow.
 1. Either create a catalog or use an existing one.
 1. Set the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
