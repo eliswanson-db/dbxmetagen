@@ -28,25 +28,7 @@
 
 # COMMAND ----------
 
-import subprocess
-import sys
-
-def install_package(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-def is_package_installed(package, version):
-    try:
-        import pkg_resources
-        pkg_resources.get_distribution(f"{package}=={version}")
-        return True
-    except pkg_resources.DistributionNotFound:
-        return False
-
-package_name = "pydantic"
-package_version = "2.9.2"
-
-if not is_package_installed(package_name, package_version):
-    install_package(f"{package_name}=={package_version}")
+# MAGIC %pip install -U pydantic==2.9.2
 
 # COMMAND ----------
 
@@ -77,21 +59,29 @@ base_url = dbutils.widgets.get("base_url")
 
 # COMMAND ----------
 
-### Will be set as instance variables for parameters in the code.
+### Set instance variables as needed.
+### Variables set in the config will be overridden by the values passed in the notebook through widgets.
 
 METADATA_PARAMS = {
-    "table_names": table_names,
-    "dest_schema": dest_schema,
-    "mode": mode
+    "table_names": table_names
     }
-
-### For authenticating to AI Gateway
-api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+if catalog_name != "":
+    METADATA_PARAMS["catalog_name"] = catalog_name
+if dest_schema != "":
+    METADATA_PARAMS["dest_schema"] = dest_schema
+if mode != "":
+    METADATA_PARAMS["mode"] = mode
+if base_url != "":
+    METADATA_PARAMS["base_url"] = base_url
+    os.environ["DATABRICKS_HOST"] = base_url
+else:
+    os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
 
 # COMMAND ----------
 
+### For authenticating to AI Gateway
+api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
-os.environ["DATABRICKS_HOST"]=MetadataConfig.SETUP_PARAMS['base_url']
 
 # COMMAND ----------
 
@@ -101,7 +91,3 @@ os.environ["DATABRICKS_HOST"]=MetadataConfig.SETUP_PARAMS['base_url']
 # COMMAND ----------
 
 main(METADATA_PARAMS)
-
-# COMMAND ----------
-
-

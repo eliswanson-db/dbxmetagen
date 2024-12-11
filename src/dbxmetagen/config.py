@@ -23,5 +23,10 @@ class MetadataConfig:
     def __init__(self, **kwargs):
         self.setup_params = self.__class__.SETUP_PARAMS
         
+        for key, value in self.setup_params.items():
+            setattr(self, key, value)
+        
         for key, value in kwargs.items():
             setattr(self, key, value)
+        
+

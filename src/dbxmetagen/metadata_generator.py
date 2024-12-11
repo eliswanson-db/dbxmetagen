@@ -160,7 +160,7 @@ class CommentChatCompletionResponse(ABC):
         self.df = df
         self.full_table_name = full_table_name
         self.comment_input_data = self.convert_to_comment_input()
-        if self.config.SETUP_PARAMS.get('add_metadata'):
+        if self.config.add_metadata:
             self.add_metadata_to_comment_input()
         print("Instantiating chat completion response...")
 
@@ -336,7 +336,7 @@ class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
 def get_response(config, content: str, prompt_content: str, model: str, max_tokens: str, temperature: str):
     client = OpenAI(
         api_key=os.environ['DATABRICKS_TOKEN'],
-        base_url=config.SETUP_PARAMS['base_url']
+        base_url=config.base_url
     )
     chat_completion = client.chat.completions.create(
         messages=prompt_content,
@@ -353,26 +353,26 @@ def get_responses(chat_response,
     pi_input_list = None # Hard coding this until full factory is setup.
     responses = {'pi': None, 'comment': None}
     if config.mode == "pi":
-        prompt_template = create_prompt_template(pi_input_list, config.SETUP_PARAMS['acro_content'])
-        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
+        prompt_template = create_prompt_template(pi_input_list, config.acro_content)
+        if len(prompt_template) > config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         pi_response, message_payload = chat_response.get_pi_response(content=pi_input_list, 
                                                                                   prompt_content=prompt_template['pi'],
-                                                                                  model=config.SETUP_PARAMS['model'], 
-                                                                                  max_tokens=config.SETUP_PARAMS['max_tokens'], 
-                                                                                  temperature=config.SETUP_PARAMS['temperature'])
+                                                                                  model=config.model, 
+                                                                                  max_tokens=config.max_tokens, 
+                                                                                  temperature=config.temperature)
         responses.append(pi_response)
         responses['pi'] = pi_response
     elif config.mode == "comment":
-        prompt_template = create_prompt_template(chat_response.comment_input_data, config.SETUP_PARAMS['acro_content'])
-        if len(prompt_template) > config.SETUP_PARAMS['max_prompt_length']:
+        prompt_template = create_prompt_template(chat_response.comment_input_data, config.acro_content)
+        if len(prompt_template) > config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         comment_response, message_payload = chat_response.get_comment_response(config, content=chat_response.comment_input_data, 
                                                                                                  prompt_content=prompt_template['comment'], 
 
-                                                                                                 model=config.SETUP_PARAMS['model'], 
-                                                                                                 max_tokens=config.SETUP_PARAMS['max_tokens'], 
-                                                                                                 temperature=config.SETUP_PARAMS['temperature'])
+                                                                                                 model=config.model, 
+                                                                                                 max_tokens=config.max_tokens, 
+                                                                                                 temperature=config.temperature)
         responses['comment'] = comment_response
     else: 
         if config.mode not in ["pi", "comment"]:
@@ -437,7 +437,7 @@ def chunk_df(df: DataFrame, columns_per_call: int = 5) -> List[DataFrame]:
 
 def get_extended_metadata_for_column(config, table_name, column_name):
     spark = SparkSession.builder.getOrCreate()
-    query = f"""DESCRIBE EXTENDED {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{table_name} {column_name};"""
+    query = f"""DESCRIBE EXTENDED {config.catalog}.{config.dest_schema}.{table_name} {column_name};"""
     return spark.sql(query)
     
 
@@ -634,11 +634,11 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
 
 def populate_log_table(df, config, current_user, base_path):
         return (df.withColumn("current_user", lit(current_user))
-          .withColumn("model", lit(config.SETUP_PARAMS['model']))
-          .withColumn("sample_size", lit(config.SETUP_PARAMS['sample_size']))
-          .withColumn("max_tokens", lit(config.SETUP_PARAMS['max_tokens']))
-          .withColumn("temperature", lit(config.SETUP_PARAMS['temperature']))
-          .withColumn("columns_per_call", lit(config.SETUP_PARAMS['columns_per_call']))
+          .withColumn("model", lit(config.model))
+          .withColumn("sample_size", lit(config.sample_size))
+          .withColumn("max_tokens", lit(config.max_tokens))
+          .withColumn("temperature", lit(config.temperature))
+          .withColumn("columns_per_call", lit(config.columns_per_call))
           .withColumn("status", lit("No Volume specified..."))
         )
 
@@ -653,7 +653,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     """
     spark = SparkSession.builder.getOrCreate()
     print(table_name)
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
     print(control_table)
     update_query = f"""
     UPDATE {control_table}
@@ -667,7 +667,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
 
 
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:   
-    df.write.mode('append').saveAsTable(f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.metadata_generation_log")
+    df.write.mode('append').saveAsTable(f"{config.catalog}.{config.dest_schema}.metadata_generation_log")
     mark_as_deleted(table_name, config)
 
 
@@ -747,8 +747,8 @@ def create_and_persist_ddl(df: DataFrame,
     print("Running create and persist ddl...")
     current_user = get_current_user()
     current_date = datetime.now().strftime('%Y%m%d')
-    if config.SETUP_PARAMS['volume_name']:
-        base_path = f"/Volumes/{config.SETUP_PARAMS['catalog']}/{config.dest_schema}/{config.SETUP_PARAMS['volume_name']}/{current_user}/{current_date}"
+    if config.volume_name:
+        base_path = f"/Volumes/{config.catalog}/{config.dest_schema}/{config.volume_name}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
         table_df = populate_log_table(table_df, config, current_user, base_path)
@@ -789,10 +789,10 @@ def get_generated_metadata(
     spark = SparkSession.builder.getOrCreate()
     df = spark.read.table(full_table_name)
     nrows = df.count()
-    chunked_dfs = chunk_df(df, config.SETUP_PARAMS['columns_per_call'])
+    chunked_dfs = chunk_df(df, config.columns_per_call)
     responses = []
     for chunk in chunked_dfs:
-        sampled_chunk = sample_df(chunk, nrows, config.SETUP_PARAMS['sample_size'])
+        sampled_chunk = sample_df(chunk, nrows, config.sample_size)
         chat_response = CommentChatCompletionResponse(config, sampled_chunk, full_table_name)
         response = get_responses(chat_response, config)
         responses.append(response)
@@ -845,7 +845,7 @@ def replace_catalog_name(config, full_table_name):
     Returns:
         str: The string with the catalog name replaced.
     """
-    catalog_tokenizable = config.SETUP_PARAMS['catalog_tokenizable']
+    catalog_tokenizable = config.catalog_tokenizable
     catalog_name = full_table_name.split('.')[0]
     
     return catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
@@ -894,10 +894,10 @@ def ddl(config: MetadataConfig) -> None:
     """
     spark = SparkSession.builder.getOrCreate()
     if config.dest_schema:
-        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}")
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog}.{config.dest_schema}")
 
-    if config.SETUP_PARAMS["volume_name"]:
-        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['volume_name']}")
+    if config.volume_name:
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.volume_name}")
 
 def create_tables(config: MetadataConfig) -> None:
     """
@@ -910,8 +910,8 @@ def create_tables(config: MetadataConfig) -> None:
             - control_table (str): The volume name.
     """
     spark = SparkSession.builder.getOrCreate()
-    if config.SETUP_PARAMS["control_table"]:
-        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+    if config.control_table:
+        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
 
 def generate_and_persist_comments(config) -> None:
@@ -940,15 +940,15 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
         queued_table_names = {row["table_name"] for row in control_df.collect()}
     config_table_names = config.table_names
-    file_table_names = load_table_names_from_csv(config.SETUP_PARAMS['source_file_path'])
+    file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
-    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.SETUP_PARAMS['catalog'])
+    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog)
     print("Combined table names", combined_table_names)
     return combined_table_names
 
@@ -986,8 +986,8 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print(f"Upserting table names to control table {table_names}...")
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.SETUP_PARAMS['catalog']}.{config.dest_schema}.{config.SETUP_PARAMS['control_table']}"
-    table_names = ensure_fully_scoped_table_names(table_names, config.SETUP_PARAMS['catalog'])
+    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
+    table_names = ensure_fully_scoped_table_names(table_names, config.catalog)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
     existing_df = spark.read.table(control_table)
     new_table_names_df = table_names_df.join(existing_df, on="table_name", how="left_anti") \
@@ -1014,11 +1014,11 @@ def split_table_names(table_names: str) -> List[str]:
 
 def main(metadata_params):
     config = MetadataConfig(**metadata_params)
-    print(config.SETUP_PARAMS['columns_per_call'])
+    print(config.columns_per_call)
     ddl(config)
     create_tables(config)
     queue = setup_queue(config)
-    if config.SETUP_PARAMS['control_table']:
+    if config.control_table:
         upsert_table_names_to_control_table(queue, config)
     config.table_names.extend(queue)
     generate_and_persist_comments(config)
