@@ -8,7 +8,7 @@ class MetadataConfig:
         "max_prompt_length": 5000,
         "volume_name": "generated_metadata",
         "acro_content": ACRO_CONTENT,
-        "columns_per_call": 10,
+        "columns_per_call": 5,
         "sample_size": 5,
         "max_tokens": 5000,
         "temperature": 0.1,
@@ -16,7 +16,7 @@ class MetadataConfig:
         "source_file_path": "table_names.csv",
         "control_table": "metadata_control",
         "add_metadata": True,
-        "apply_ddl": True, 
+        "apply_ddl": False, 
         "dry_run": False,
     }
     
