@@ -28,6 +28,8 @@ There are a few key sections in this notebook:
 1. If cloned locally, recommend using asset bundle build to create and run a workflow.
 1. Either create a catalog or use an existing one.
 1. Set the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
+   1. Make sure to check the options for add_metadata and apply_ddl and set them correctly. Add metadata will run a describe extended on every column and use the metadata in table descriptions, though ANALYZE ... COLUMNS will need to have been run to get useful information from this.
+   2. You also can adjust sample_size, columns_per_call, and ACRO_CONTENT.
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Current status
