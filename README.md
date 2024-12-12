@@ -3,7 +3,7 @@
 # GenAI-Assisted Metadata Generation (a.k.a `dbxmetagen`)
 
 # `dbxmetagen` Overview
-### This is a utlity to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
+### This is a utility to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
 
 While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. 
 
@@ -14,21 +14,21 @@ AI generated comments are not always accurate and comment DDLs should be reviewe
 There are a few key sections in this notebook: 
 - Library installs and setup using the config referenced in `dbxmetagen/src/config.py`
 - Function definitions for:
-- Retrieving table and column information from the list of tables provided in `table_names.csv`
-- Sampling data from those tables, with exponential backoff, to help generate more accurate metadata, especially for columns with categorical data, that will also indicate the structure of the data. This is particularly helpful for [Genie](https://www.databricks.com/product/ai-bi/genie). This sampling also checks for nulls.
-- Use of `Pydantic` to ensure that LLM metadata generation conforms to a particular format. This is also used for DDL generation to ensure that the DDL is always runnable. 
-- Creation of a log table keeping track of tables read/modified
-- Creation of DDL scripts, one for each table, that have the DDL commands to `ALTER TABLE` to add comments to table and columns. This is to help integrate with your CI/CD processes, in case you do not have access in a production environment
+  - Retrieving table and column information from the list of tables provided in `table_names.csv`
+  - Sampling data from those tables, with exponential backoff, to help generate more accurate metadata, especially for columns with categorical data, that will also indicate the structure of the data. This is particularly helpful for [Genie](https://www.databricks.com/product/ai-bi/genie). This sampling also checks for nulls.
+  - Use of `Pydantic` to ensure that LLM metadata generation conforms to a particular format. This is also used for DDL generation to ensure that the DDL is always runnable. 
+  - Creation of a log table keeping track of tables read/modified
+  - Creation of DDL scripts, one for each table, that have the DDL commands to `ALTER TABLE` to add comments to table and columns. This is to help integrate with your CI/CD processes, in case you do not have access in a production environment
 - Application of the functions above to generate metadata and DDL for the list of tables provided in `dbxmetagen/table_names.csv` 
-
 
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
+   1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
 1. If cloned locally, recommend using asset bundle build to create and run a workflow.
-1. Either create a catalog and schema, or use an existing one.
-1. Set the config.py file in src/dbxmetagen to whatever settings you need.
-1. In src/dbxmetagen/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> as you define your catalog in the config.py file separately. 
+1. Either create a catalog or use an existing one.
+1. Set the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
+1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Current status
 1. Tested on DBR 15.4ML LTS
@@ -57,4 +57,3 @@ There are a few key sections in this notebook:
 1. Add async
 1. any utility of agent framework?
 1. Fix input data classes
-
