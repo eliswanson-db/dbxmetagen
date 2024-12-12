@@ -1,4 +1,3 @@
-ACRO_CONTENT = "{'DBX': 'Databricks'}"
 class MetadataConfig:
     ACRO_CONTENT = {"DBX": "Databricks"}
     SETUP_PARAMS = {
@@ -9,15 +8,16 @@ class MetadataConfig:
         "max_prompt_length": 5000,
         "volume_name": "generated_metadata",
         "acro_content": ACRO_CONTENT,
-        "columns_per_call": 100,
-        "sample_size": 10,
+        "columns_per_call": 10,
+        "sample_size": 5,
         "max_tokens": 5000,
         "temperature": 0.1,
         "table_names_source": "csv_file_path", #could also use a list of table names in the config
         "source_file_path": "table_names.csv",
         "control_table": "metadata_control",
         "add_metadata": True,
-        "ddl_application": "ddl" #direct other option
+        "apply_ddl": True, 
+        "dry_run": False,
     }
     
     def __init__(self, **kwargs):

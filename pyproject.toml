@@ -3,7 +3,7 @@ name = "dbxmetagen"
 version = "0.2.6"
 description = "Generates comments and other metadata for Delta tables in Databricks."
 readme = "README.md"
-authors = ["Eli Swanson <eli.swanson@databricks.com>"]
+authors = ["Eli Swanson <eli.swanson@databricks.com>", "James McCall <james.mccall@databricks.com>"]
 license = "DB License"
 packages = [
     { include = "dbxmetagen", from = "src" }
