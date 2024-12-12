@@ -47,7 +47,7 @@ There are a few key sections in this notebook:
 1. Add flag for inclusion of metadata - Done
 1. Add flag for direct commenting of tables - Done
 1. Add flag for dry run of direct commenting - Done
-1. Adjust prompts and few-shot examples to reduce errors
+1. Adjust prompts and few-shot examples to reduce errors and improve comments
 1. Add a retry for get_response with a double injection reminder to only respond with the provided schema.
 1. Register as a UC model to allow tracking and iteration of prompts
 1. Expand detail in audit logs
