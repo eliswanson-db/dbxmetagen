@@ -28,6 +28,11 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Install Pydantic if needed
+
+# COMMAND ----------
+
 # MAGIC %pip install -U pydantic==2.9.2
 
 # COMMAND ----------
@@ -36,10 +41,25 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC # Imports
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC
+
+# COMMAND ----------
+
 from src.dbxmetagen.prompts import create_prompt_template
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.metadata_generator import *
 from src.dbxmetagen.error_handling import exponential_backoff
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Set up widgets
 
 # COMMAND ----------
 
@@ -61,25 +81,11 @@ base_url = dbutils.widgets.get("base_url")
 
 ### Set instance variables as needed.
 ### Variables set in the config will be overridden by the values passed in the notebook through widgets.
-
-METADATA_PARAMS = {
-    "table_names": table_names
-    }
-if catalog_name != "":
-    METADATA_PARAMS["catalog_name"] = catalog_name
-if dest_schema != "":
-    METADATA_PARAMS["dest_schema"] = dest_schema
-if mode != "":
-    METADATA_PARAMS["mode"] = mode
-if base_url != "":
-    METADATA_PARAMS["base_url"] = base_url
-    os.environ["DATABRICKS_HOST"] = base_url
-else:
-    os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
+METADATA_PARAMS = instantiate_metadata_objects(catalog_name, dest_schema, table_names, mode, base_url)
 
 # COMMAND ----------
 
-### For authenticating to AI Gateway
+### Set key for authenticating to AI Gateway
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
 
@@ -87,6 +93,13 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 
 # MAGIC %md
 # MAGIC ### Now run the code - this may take some time depending on how many tables/columns you are running and what your tokens/sec throughput on the LLM is. 
+
+# COMMAND ----------
+
+test = False
+print(test)
+if test:
+    print("Yes")
 
 # COMMAND ----------
 

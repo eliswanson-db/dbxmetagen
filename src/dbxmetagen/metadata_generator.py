@@ -9,14 +9,12 @@ import json
 import re
 from typing import List, Dict, Any, Literal, Tuple
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, Row
-from pyspark.sql.functions import col, struct, to_timestamp, current_timestamp
+from pyspark.sql.functions import col, struct, to_timestamp, current_timestamp, lit, when, sum as spark_sum
 from typing import List, Dict, Any
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, Row
 import nest_asyncio
-from pyspark.sql import Row
 from datetime import datetime
 import mlflow
-from pyspark.sql.functions import lit
 import time
 import random
 from pyspark.sql import SparkSession
@@ -24,71 +22,7 @@ from pyspark.sql.functions import udf
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.sampling import determine_sampling_ratio
 from src.dbxmetagen.prompts import create_prompt_template
-
-@udf
-def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
-    """
-    Generates a DDL statement for creating a table with the given schema.
-
-    Args:
-        table_name (str): The name of the table to create.
-        schema (StructType): The schema of the table.
-
-    Returns:
-        str: The DDL statement for adding the 
-    """
-    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
-    return ddl_statement
-
-
-@udf
-def generate_column_comment_ddl(full_table_name: str, column_name: str, comment: str) -> str:
-    """
-    Generates a DDL statement for creating a table with the given schema.
-
-    Args:
-        table_name (str): The name of the table to create.
-        schema (StructType): The schema of the table.
-
-    Returns:
-        str: The DDL statement for adding the column comment to the table.
-    """
-    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN {column_name} COMMENT "{comment}";"""
-    return ddl_statement
-
-
-@udf
-def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
-    """
-    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
-
-    Args:
-        table_name (str): The name of the table to create.
-        column_name (str): The schema of the table.
-        pi_tag (str): The schema of the table.
-
-    Returns:
-        str: The DDL statement for adding the pi tag to the table.
-    """
-    ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
-    return ddl_statement
-
-
-@udf
-def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
-    """
-    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
-
-    Args:
-        table_name (str): The name of the table to create.
-        column_name (str): The schema of the table.
-        pi_tag (str): The schema of the table.
-
-    Returns:
-        str: The DDL statement for adding the pi tag to the table.
-    """
-    ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET TAGS ('has_pi' = '{pi_type}');"
-    return ddl_statement
+from src.dbxmetagen.error_handling import exponential_backoff
 
 class DDLGenerator(ABC):
     def __init__(self):
@@ -120,7 +54,7 @@ class Response(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     table: str
-    column_names: List[str]
+    columns: List[str]
 
     
 class PIResponse(Response):
@@ -179,7 +113,7 @@ class CommentChatCompletionResponse(ABC):
             extended_metadata_df = spark.sql(
                 f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
             )            
-            filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")            
+            filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL").filter(extended_metadata_df["info_name"] != "description")
             column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
             combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
             column_metadata_dict[column_name] = combined_metadata
@@ -239,7 +173,9 @@ class CommentChatCompletionResponse(ABC):
             raise ValueError(f"JSON decode error: {e}")
 
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['column_names']):
+        print("Content dictionary:", content)
+        print("Response dict:", response_dict)
+        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
             raise ValueError("Column names do not match column contents")
     
     @staticmethod
@@ -349,7 +285,7 @@ def get_response(config, content: str, prompt_content: str, model: str, max_toke
 
 def get_responses(chat_response,
                   config: MetadataConfig) -> Tuple[PIResponse, CommentResponse]:
-    print("Getting responses...")
+    print("Getting chat completion responses...")
     pi_input_list = None # Hard coding this until full factory is setup.
     responses = {'pi': None, 'comment': None}
     if config.mode == "pi":
@@ -456,25 +392,29 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     if nrows < sample_size:
         print(f"Not enough rows for a proper sample. Continuing with inference with {nrows} rows...")
         return df.limit(sample_size)
+    
     larger_sample = sample_size * 100
     sampling_ratio = determine_sampling_ratio(nrows, larger_sample)
     sampled_df = df.sample(withReplacement=False, fraction=sampling_ratio)
-    length_of_chunk = sampled_df.columns.__len__()
-    n_null_cols = sum(sampled_df[col].isNull().cast("int") for col in sampled_df.columns)
-    print("nrows of sampled df...", sampled_df.count())
-    print("len of n cols", length_of_chunk)
-    print("n null cols", n_null_cols)
-    threshold = int(sampled_df.columns.__len__() * 0.5)
-    print("threshold", threshold)
-    filtered_df = sampled_df.filter(length_of_chunk - n_null_cols >= threshold)
+    null_counts_per_row = sampled_df.withColumn(
+        "null_count", sum(when(col(c).isNull(), 1).otherwise(0) for c in sampled_df.columns)
+    )
+    print("null counts per row 1", display(null_counts_per_row))
+    
+    threshold = len(sampled_df.columns) // 2
+    
+    filtered_df = null_counts_per_row.filter(col("null_count") < threshold).drop("null_count")
+    
     result_rows = filtered_df.count()
     print("result rows", result_rows)
+    print("null counts per row 2", display(null_counts_per_row))
+    print("threshold", threshold)
 
     if result_rows < sample_size:
-        print("Not enough non-NULL rows, returning available rows, despite large proportion of NULLs:", result_rows, "vs", sample_size)
+        print("Not enough non-NULL rows, returning available rows, despite large proportion of NULLs. Result rows:", result_rows, "vs sample size:", sample_size)
         return df.limit(sample_size)
     
-    print(f"Filtering {result_rows} rows down to {sample_size} rows...")
+    print(f"Filtering {result_rows} result rows down to {sample_size} rows...")
     return filtered_df.limit(sample_size)
 
 
@@ -514,7 +454,7 @@ def append_column_rows(rows: List[Row], full_table_name: str, response: Dict[str
     Returns:
         List[Row]: The updated list of rows with the new column rows appended.
     """
-    for column_name, column_content in zip(response.column_names, response.column_contents):
+    for column_name, column_content in zip(response.columns, response.column_contents):
         if isinstance(column_content, dict):   
             row = Row(
                 table=full_table_name,
@@ -846,9 +786,29 @@ def replace_catalog_name(config, full_table_name):
         str: The string with the catalog name replaced.
     """
     catalog_tokenizable = config.catalog_tokenizable
-    catalog_name = full_table_name.split('.')[0]
+    parts = full_table_name.split('.')
+    if len(parts) != 3:
+        raise ValueError("full_table_name must be in the format 'catalog.schema.table'")
+    catalog_name, schema_name, table_name = parts
+    replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
     
-    return catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
+    return f"{replaced_catalog_name}.{schema_name}.{table_name}"
+
+
+def apply_comment_ddl(df: DataFrame, config: MetadataConfig) -> None:
+    """
+    Applies the comment DDL statements stored in the DataFrame to the table.
+
+    Args:
+        df (DataFrame): The DataFrame containing the DDL statements.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    ddl_statements = df.select("ddl").collect()
+    for row in ddl_statements:
+        ddl_statement = row["ddl"]
+        print(f"Executing DDL: {ddl_statement}")
+        if not config.dry_run:
+            spark.sql(ddl_statement)
 
 
 def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
@@ -866,23 +826,39 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     """
     print("Process and add ddl...")
     column_df, table_df = review_and_generate_metadata(config, table_name)
-    dfs = {}
-    if config.mode == "comment":
-        # TODO: turn this into a class
-        table_df = add_ddl_to_table_comment_df(table_df, "ddl")
-        column_df = add_ddl_to_column_comment_df(column_df, "ddl")
-        # TODO: instead of taking the first table description, fetch all and send to a summarizer.
-        dfs['comment_table_df'] = table_df.limit(1)
-        dfs['comment_column_df'] = column_df
-    elif config.mode == "pi":
-        table_df = add_column_ddl_to_pi_df(table_df, "ddl")
-        dfs['pi_table_df'] = table_df.limit(1)
-        dfs['pi_column_df'] = column_df   
+    print("Column df...")
+    print(type(column_df))
+    print(column_df.columns)
+    display(column_df)
+    dfs = add_ddl_to_dfs(config, table_df, column_df)
     print(dfs) 
     return dfs
 
 
-def ddl(config: MetadataConfig) -> None:
+def add_ddl_to_dfs(config, table_df, column_df):
+    dfs = {}
+    if config.mode == "comment":
+        dfs['comment_table_df'] = summarize_table_content(add_ddl_to_table_comment_df(table_df, "ddl"), config)
+        dfs['comment_column_df'] = add_ddl_to_column_comment_df(column_df, "ddl")
+        if config.apply_ddl:
+            apply_comment_ddl(dfs['comment_table_df'], config)
+            apply_comment_ddl(dfs['comment_column_df'], config)
+    elif config.mode == "pi":
+        table_df = add_column_ddl_to_pi_df(table_df, "ddl")
+        dfs['pi_table_df'] = table_df.limit(1)
+        dfs['pi_column_df'] = column_df
+    else:
+        raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
+    return dfs
+
+
+def summarize_table_content(table_df, config):
+    """Create a new completion class for this."""
+    if table_df.count() > 1:
+        return table_df.limit(1)
+
+
+def setup_ddl(config: MetadataConfig) -> None:
     """
     Creates a schema volume if it does not already exist.
 
@@ -912,6 +888,24 @@ def create_tables(config: MetadataConfig) -> None:
     spark = SparkSession.builder.getOrCreate()
     if config.control_table:
         spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+
+
+def instantiate_metadata_objects(catalog_name, schema_name, table_names, mode, base_url):
+    METADATA_PARAMS = {
+        "table_names": table_names
+        }
+    if catalog_name != "":
+        METADATA_PARAMS["catalog_name"] = catalog_name
+    if schema_name != "":
+        METADATA_PARAMS["dest_schema"] = schema_name
+    if mode != "":
+        METADATA_PARAMS["mode"] = mode
+    if base_url != "":
+        METADATA_PARAMS["base_url"] = base_url
+        os.environ["DATABRICKS_HOST"] = base_url
+    else:
+        os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
+    return METADATA_PARAMS
 
 
 def generate_and_persist_comments(config) -> None:
@@ -1012,10 +1006,94 @@ def split_table_names(table_names: str) -> List[str]:
         return []
     return table_names.split(',')
 
+def instantiate_metadata(catalog_name, schema_name, table_names, mode, base_url):
+    METADATA_PARAMS = {
+        "table_names": table_names
+        }
+    if catalog_name != "":
+        METADATA_PARAMS["catalog_name"] = catalog_name
+    if dest_schema != "":
+        METADATA_PARAMS["dest_schema"] = schema_name
+    if mode != "":
+        METADATA_PARAMS["mode"] = mode
+    if base_url != "":
+        METADATA_PARAMS["base_url"] = base_url
+        os.environ["DATABRICKS_HOST"] = base_url
+    else:
+        os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
+    return METADATA_PARAMS
+
+
+@udf
+def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
+    """
+    Generates a DDL statement for creating a table with the given schema.
+
+    Args:
+        table_name (str): The name of the table to create.
+        schema (StructType): The schema of the table.
+
+    Returns:
+        str: The DDL statement for adding the 
+    """
+    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
+    return ddl_statement
+
+
+@udf
+def generate_column_comment_ddl(full_table_name: str, column_name: str, comment: str) -> str:
+    """
+    Generates a DDL statement for creating a table with the given schema.
+
+    Args:
+        table_name (str): The name of the table to create.
+        schema (StructType): The schema of the table.
+
+    Returns:
+        str: The DDL statement for adding the column comment to the table.
+    """
+    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN {column_name} COMMENT "{comment}";"""
+    return ddl_statement
+
+
+@udf
+def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
+    """
+    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
+
+    Args:
+        table_name (str): The name of the table to create.
+        column_name (str): The schema of the table.
+        pi_tag (str): The schema of the table.
+
+    Returns:
+        str: The DDL statement for adding the pi tag to the table.
+    """
+    ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
+    return ddl_statement
+
+
+@udf
+def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
+    """
+    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
+
+    Args:
+        table_name (str): The name of the table to create.
+        column_name (str): The schema of the table.
+        pi_tag (str): The schema of the table.
+
+    Returns:
+        str: The DDL statement for adding the pi tag to the table.
+    """
+    ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET TAGS ('has_pi' = '{pi_type}');"
+    return ddl_statement
+
+
 def main(metadata_params):
     config = MetadataConfig(**metadata_params)
     print(config.columns_per_call)
-    ddl(config)
+    setup_ddl(config)
     create_tables(config)
     queue = setup_queue(config)
     if config.control_table:
