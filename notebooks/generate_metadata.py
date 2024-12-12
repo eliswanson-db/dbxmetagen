@@ -96,11 +96,4 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 
 # COMMAND ----------
 
-test = False
-print(test)
-if test:
-    print("Yes")
-
-# COMMAND ----------
-
 main(METADATA_PARAMS)
