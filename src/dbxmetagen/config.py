@@ -5,6 +5,7 @@ class MetadataConfig:
         "catalog": "dbxmetagen",
         "catalog_tokenizable": "__CATALOG_NAME__", #"__CATALOG_NAME___{{env}}", # __CATALOG_NAME__
         "model": "databricks-meta-llama-3-1-70b-instruct",
+        "model_type": None,
         "max_prompt_length": 5000,
         "volume_name": "generated_metadata",
         "acro_content": ACRO_CONTENT,
