@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.types import List, Any
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
-from src.dbxmetagen.prompts import create_prompt_template
+from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
 
 
 
@@ -37,11 +37,10 @@ class CommentResponse(Response):
 class SummaryCommentResponse(Response):
     pass
 
+
 class MetadataGenerator(ABC):
-    def __init__(self, config, df, full_table_name):
+    def __init__(self, config):
         self.config = config
-        self.df = df
-        self.full_table_name = full_table_name
 
     @abstractmethod
     def get_responses(self) -> Tuple[Response, ChatCompletion]:
@@ -49,52 +48,22 @@ class MetadataGenerator(ABC):
 
 
 class CommentGenerator(MetadataGenerator):
-    def __init__(self, config, df, full_table_name):
-        super().__init__(config, df, full_table_name)
-        self.comment_input_data = self.convert_to_comment_input()
-        if self.config.add_metadata:
-            self.add_metadata_to_comment_input()
-    
     @property
     def openai_client(self):
         return OpenAI(api_key=os.environ["DATABRICKS_TOKEN"], base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
 
-    def convert_to_comment_input(self) -> Dict[str, Any]:
-        return {
-            "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='split'),
-        }
-
-    def get_responses(self) -> Tuple[CommentResponse, ChatCompletion]:
-        prompt_template = create_prompt_template(self.comment_input_data, self.config.acro_content)
-        if len(prompt_template) > self.config.max_prompt_length:
+    def get_responses(self, config, prompt, prompt_content) -> Tuple[CommentResponse, ChatCompletion]:
+        if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        
         comment_response, message_payload = self.get_comment_response(
             self.config, 
-            content=self.comment_input_data, 
-            prompt_content=prompt_template['comment'], 
+            content=prompt_content, 
+            prompt_content=prompt['comment'], 
             model=self.config.model, 
             max_tokens=self.config.max_tokens, 
             temperature=self.config.temperature
         )
         return comment_response, message_payload
-
-    def add_metadata_to_comment_input(self) -> None:
-        spark = SparkSession.builder.getOrCreate()
-        column_metadata_dict = {}
-        for column_name in self.comment_input_data['column_contents']['columns']:
-            extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
-            )            
-            filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL") \
-                                                       .filter(extended_metadata_df["info_name"] != "description") \
-                                                       .filter(extended_metadata_df["info_name"] != "comment")
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            column_metadata_dict[column_name] = combined_metadata
-            
-        self.comment_input_data['column_contents']['column_metadata'] = column_metadata_dict
 
     def predict(self, prompt_content):
         self.chat_response = self.openai_client.chat.completions.create(
@@ -171,17 +140,17 @@ class CommentGenerator(MetadataGenerator):
 
 
 class PIIdentifier(MetadataGenerator):
-    def __init__(self, config, df, full_table_name):
-        super().__init__(config, df, full_table_name)
+    def __init__(self, config, prompt):
+        super().__init__(config, prompt)
 
-    def get_responses(self) -> Tuple[PIResponse, PIResponse]:
-        prompt_template = create_prompt_template(self.df, self.config.acro_content)
-        if len(prompt_template) > self.config.max_prompt_length:
+    def get_responses(self, config, df, full_table_name) -> Tuple[PIResponse, PIResponse]:
+        prompt = PromptFactory.create_prompt(config, df, full_table_name)
+        if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         pi_response, message_payload = self.get_pi_response(
             self.config, 
             content=self.df, 
-            prompt_content=prompt_template['pi'], 
+            prompt_content=prompt['pi'], 
             model=self.config.model, 
             max_tokens=self.config.max_tokens, 
             temperature=self.config.temperature
@@ -255,10 +224,10 @@ class PIIdentifier(MetadataGenerator):
 
 class MetadataGeneratorFactory:
     @staticmethod
-    def create_generator(config, df, full_table_name) -> MetadataGenerator:
+    def create_generator(config) -> MetadataGenerator:
         if config.mode == "comment":
-            return CommentGenerator(config, df, full_table_name)
+            return CommentGenerator(config)
         elif config.mode == "pi":
-            return PIIdentifier(config, df, full_table_name)
+            return PIIdentifier(config)
         else:
             raise ValueError("Invalid mode. Use 'pi' or 'comment'.")

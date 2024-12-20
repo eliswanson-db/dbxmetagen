@@ -1,6 +1,32 @@
-def create_prompt_template(content, acro_content):
-    return {"pi":
-              [
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+import pandas as pd
+from pyspark.sql import SparkSession
+
+
+class Prompt(ABC):
+    def __init__(self, config, df, full_table_name):
+        self.config = config
+        self.df = df
+        self.full_table_name = full_table_name
+        self.prompt_content = self.convert_to_comment_input()
+        if self.config.add_metadata:
+            self.add_metadata_to_comment_input()
+        print("Instantiating chat completion response...")
+
+    @abstractmethod
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def add_metadata_to_comment_input(self) -> None:
+        pass
+
+    def create_prompt_template(self) -> Dict[str, Any]:
+        content = self.prompt_content
+        acro_content = self.config.acro_content
+        return {
+            "pi": [
                 {
                     "role": "system",
                     "content": f"You are an AI assistant trying to help identify personally identifying information. Please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content." 
@@ -84,4 +110,65 @@ def create_prompt_template(content, acro_content):
             }
 
 
-COMMENT_PROMPT = ""
+class CommentPrompt(Prompt):
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        spark = SparkSession.builder.getOrCreate()
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL") &
+                (extended_metadata_df["info_name"] != "description") &
+                (extended_metadata_df["info_name"] != "comment")
+            )
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+            
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+
+class PIPrompt(Prompt):
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        spark = SparkSession.builder.getOrCreate()
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL") &
+                (extended_metadata_df["info_name"] != "description") &
+                (extended_metadata_df["info_name"] != "comment")
+            )
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+            
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+
+class PromptFactory:
+    @staticmethod
+    def create_prompt(config, df, full_table_name) -> Prompt:
+        if config.mode == "comment":
+            return CommentPrompt(config, df, full_table_name)
+        elif config.mode == "pi":
+            return PIPrompt(config, df, full_table_name)
+        else:
+            raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
+

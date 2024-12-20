@@ -10,6 +10,9 @@ While Databricks does offer [AI Generated Documentation](https://docs.databricks
 ### Disclaimer
 AI generated comments are not always accurate and comment DDLs should be reviewed prior to modifying your tables. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. 
 
+Unless explicitly set not to, this utility does inspect data and send it to the model endpoint specified. 
+
+
 ### Solution Overview:
 There are a few key sections in this notebook: 
 - Library installs and setup using the config referenced in `dbxmetagen/src/config.py`

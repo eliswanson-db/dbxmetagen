@@ -21,7 +21,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.sampling import determine_sampling_ratio
-from src.dbxmetagen.prompts import create_prompt_template
+from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.comment_summarizer import TableCommentSummarizer
 from src.dbxmetagen.metadata_generator import Response, PIResponse, CommentResponse, MetadataGeneratorFactory, PIIdentifier, MetadataGenerator, CommentGenerator
@@ -51,192 +51,6 @@ class PInput(Input):
 class CommentInput(Input):
     
     column_contents: List[List[Any]]
-
-
-
-# class PIChatCompletionResponse(ABC):
-
-#     def get_pi_response(self, content: str, prompt_content: str, model: str):
-#         chat_completion = self.predict(content, prompt_content, model)
-#         response_payload = chat_completion.choices[0].message
-#         response = response_payload.content
-#         retries = 0
-#         try:            
-#             response_dict = json.loads(response)
-#             if not isinstance(response_dict, dict):
-#                 raise ValueError("columns field is not a valid dict")
-#             chat_response = PIResponse(**response_dict)
-#             return chat_response, response_payload
-#         except (ValidationError, json.JSONDecodeError, AttributeError) as e:
-#             retries+=1
-#             raise ValueError(f"Validation error: {e} {response}")
-#             return None
-
-
-# # TODO: change ChatCompletionResponse to a factory to allow Comment generation or PI identification
-# class CommentGenerator(ABC):
-
-#     @property
-#     def openai_client(self):
-#         return OpenAI(api_key=os.environ["DATABRICKS_TOKEN"],
-#                       base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
-        
-#     def __init__(self, config, df, full_table_name):
-#         self.config = config
-#         self.api_key = os.environ['DATABRICKS_TOKEN']
-#         self.base_url = config.base_url
-#         self.df = df
-#         self.full_table_name = full_table_name
-#         self.comment_input_data = self.convert_to_comment_input()
-#         if self.config.add_metadata:
-#             self.add_metadata_to_comment_input()
-#         print("Instantiating chat completion response...")
-
-#     def convert_to_comment_input(self) -> Dict[str, Any]:
-#         return {
-#             "table_name": self.full_table_name,
-#             "column_contents": self.df.toPandas().to_dict(orient='split'),
-#         }
-
-#     def predict(self, prompt_content):
-#         self.chat_response = self.openai_client.chat.completions.create(
-#             messages=prompt_content,
-#             model=self.config.model,
-#             max_tokens=self.config.max_tokens,
-#             temperature=self.config.temperature
-#         )
-#         return self.chat_response
-    
-#     def get_responses(self) -> Tuple[PIResponse, CommentResponse]:
-#         print("Getting chat completion responses...")
-#         config = self.config
-#         pi_input_list = None # Hard coding this until full factory is setup.
-#         responses = {'pi': None, 'comment': None}
-#         if config.mode == "pi":
-#             prompt_template = create_prompt_template(pi_input_list, config.acro_content)
-#             if len(prompt_template) > config.max_prompt_length:
-#                 raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-#             pi_response, message_payload = self.get_pi_response(content=self.pi_input_list, 
-#                                                                                     prompt_content=prompt_template['pi'],
-#                                                                                     model=config.model, 
-#                                                                                     max_tokens=config.max_tokens, 
-#                                                                                     temperature=config.temperature)
-#             responses.append(pi_response)
-#             responses['pi'] = pi_response
-#         elif config.mode == "comment":
-#             prompt_template = create_prompt_template(self.comment_input_data, config.acro_content)
-#             if len(prompt_template) > config.max_prompt_length:
-#                 raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-#             comment_response, message_payload = self.get_comment_response(config, content=self.comment_input_data, 
-#                                                                                                     prompt_content=prompt_template['comment'], 
-
-#                                                                                                     model=config.model, 
-#                                                                                                     max_tokens=config.max_tokens, 
-#                                                                                                     temperature=config.temperature)
-#             responses['comment'] = comment_response
-#         else: 
-#             if config.mode not in ["pi", "comment"]:
-#                     raise ValueError("To be valid, mode must be 'pi' or 'comment'.")
-#         return responses
-
-#     def add_metadata_to_comment_input(self) -> None:
-#         print("Adding metadata to comment input...")
-#         spark = SparkSession.builder.getOrCreate()
-#         config = self.config
-#         column_metadata_dict = {}
-#         for column_name in self.comment_input_data['column_contents']['columns']:
-#             extended_metadata_df = spark.sql(
-#                 f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
-#             )            
-#             filtered_metadata_df = extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL") \
-#                                                        .filter(extended_metadata_df["info_name"] != "description") \
-#                                                        .filter(extended_metadata_df["info_name"] != "comment")
-#             column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-#             combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-#             column_metadata_dict[column_name] = combined_metadata
-            
-#         self.comment_input_data['column_contents']['column_metadata'] = column_metadata_dict
-
-#     def get_comment_response(self, 
-#                              config: MetadataConfig,
-#                              content: str, 
-#                              prompt_content: str, 
-#                              model: str, 
-#                              max_tokens: int, 
-#                              temperature: float,
-#                              retries: int = 0, 
-#                              max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
-#         try:
-#             chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
-#             response_payload = chat_completion.choices[0].message
-#             response_dict = self._parse_response(response_payload.content)
-#             self._validate_response(content, response_dict)
-#             chat_response = CommentResponse(**response_dict)
-#             return chat_response, response_payload
-#         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
-#             if retries < max_retries:
-#                 print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
-#                 return self.get_comment_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
-#             else:
-#                 print("Validation error - response")
-#                 raise ValueError(f"Validation error after {max_retries} attempts: {e}")
-
-#     def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
-#         try:
-#             return self.predict(prompt_content)
-#         except Exception as e:
-#             if retries < max_retries:
-#                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
-#                 exponential_backoff(retries)
-#                 return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
-#             else:
-#                 print(f"Failed after {max_retries} retries.")
-#                 raise e
-
-#     def _parse_response(self, response: str) -> Dict[str, Any]:
-#         try:
-#             response_dict = json.loads(response)
-#             if not isinstance(response_dict, dict):
-#                 raise ValueError("Response is not a valid dict")
-#             return response_dict
-#         except json.JSONDecodeError as e:
-#             raise ValueError(f"JSON decode error: {e}")
-
-#     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-#         print("Content dictionary:", content)
-#         print("Response dict:", response_dict)
-#         if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
-#             raise ValueError("Column names do not match column contents")
-    
-#     @staticmethod
-#     def _check_list_and_dict_keys_match(dict_list, string_list):
-#         if isinstance(dict_list, list):
-#             dict_keys = dict_list
-#         else:
-#             try:
-#                 dict_keys = dict_list.keys()
-#             except: 
-#                 raise TypeError("dict_list is not a list or a dictionary")
-#         list_matches_keys = all(item in dict_keys for item in string_list)
-#         keys_match_list = all(key in string_list for key in dict_keys)
-#         if not (list_matches_keys and keys_match_list):
-#             return False
-#         return True
-
-
-# class MetadataGenerator(ABC):
-#     def __init__(self):
-#         pass
-
-
-# class CommentGenerator(MetadataGenerator, CommentGenerator):
-#     def __init__(self):
-#         pass
-
-
-# class PIIdentifier(MetadataGenerator, PIChatCompletionResponse):
-#     def __init__(self):
-#         pass
 
 
 def tag_table(table_name: str, tags: Dict[str, str]) -> None:
@@ -651,22 +465,38 @@ def get_generated_metadata(
     responses = []
     for chunk in chunked_dfs:
         sampled_chunk = sample_df(chunk, nrows, config.sample_size)
-        if config.model_type == "registered":        
-            model_name = None    
-            model = mlflow.pyfunc.load_model(model_name)
-            prediction = model.predict()
-
-        else:
-            chat_response = MetadataGeneratorFactory.create_generator(config, sampled_chunk, full_table_name)
-        # Currently not doing anything with payload
-        response, payload = chat_response.get_responses()
+        prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
+        prompt_messages = prompt.create_prompt_template()
+        if config.registered_model_name:                
+            call_registered_model(config, prompt)
+        else:            
+            chat_response = MetadataGeneratorFactory.create_generator(config)
+        response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
         responses.append(response)
     print(responses)
     return responses
 
 
 def call_registered_model(config: MetadataConfig):
+    ### TODO: Implement
+    model_name = config.registered_model_name
+    model_version = config.registered_model_version
+    full_model_name = None
+    model = mlflow.pyfunc.load_model(model_name)
+    prediction = model.predict()
+
+
+def choose_registered_model(config, df, full_table_name):
     pass
+
+
+# def choose_generator_class(config):
+#     if config.mode == "comment":
+#         return CommentGenerator(config, df, full_table_name)
+#     elif config.mode == "pi":
+#         return PIIdentifier(config, df, full_table_name)
+#     else:
+#         raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
 
 
 def review_and_generate_metadata(

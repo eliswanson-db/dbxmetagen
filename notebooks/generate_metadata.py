@@ -56,9 +56,9 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 import os
-from src.dbxmetagen.prompts import create_prompt_template
+from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.metadata_generator import PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory
+from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
 from src.dbxmetagen.processing import (
     tag_table,
     write_to_log_table,
