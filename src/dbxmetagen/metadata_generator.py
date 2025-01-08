@@ -5,6 +5,7 @@ from pyspark.sql import SparkSession
 from pydantic import ValidationError
 from typing import Dict, Tuple
 from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
+import mlflow
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
@@ -39,7 +40,7 @@ class SummaryCommentResponse(Response):
 
 
 class MetadataGenerator(ABC):
-    def __init__(self, config):
+    def from_context(self, config):
         self.config = config
 
     @abstractmethod
@@ -64,8 +65,8 @@ class CommentGenerator(MetadataGenerator):
             temperature=self.config.temperature
         )
         return comment_response, message_payload
-
-    def predict(self, prompt_content):
+    
+    def predict_chat_response(self, prompt_content):
         self.chat_response = self.openai_client.chat.completions.create(
             messages=prompt_content,
             model=self.config.model,
@@ -100,7 +101,7 @@ class CommentGenerator(MetadataGenerator):
 
     def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
         try:
-            return self.predict(prompt_content)
+            return self.predict_chat_response(prompt_content)
         except Exception as e:
             if retries < max_retries:
                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
@@ -231,3 +232,4 @@ class MetadataGeneratorFactory:
             return PIIdentifier(config)
         else:
             raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
+

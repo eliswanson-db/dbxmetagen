@@ -1,5 +1,7 @@
 class MetadataConfig:
-    ACRO_CONTENT = {"DBX": "Databricks"}
+    ACRO_CONTENT = {
+        "DBX": "Databricks"
+        }
     SETUP_PARAMS = {
         "base_url": "https://adb-830292400663869.9.azuredatabricks.net",
         "catalog": "dbxmetagen",

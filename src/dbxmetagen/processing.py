@@ -768,22 +768,22 @@ def split_table_names(table_names: str) -> List[str]:
         return []
     return table_names.split(',')
 
-def instantiate_metadata(catalog_name, schema_name, table_names, mode, base_url):
-    METADATA_PARAMS = {
-        "table_names": table_names
-        }
-    if catalog_name != "":
-        METADATA_PARAMS["catalog_name"] = catalog_name
-    if dest_schema != "":
-        METADATA_PARAMS["dest_schema"] = schema_name
-    if mode != "":
-        METADATA_PARAMS["mode"] = mode
-    if base_url != "":
-        METADATA_PARAMS["base_url"] = base_url
-        os.environ["DATABRICKS_HOST"] = base_url
-    else:
-        os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
-    return METADATA_PARAMS
+# def instantiate_metadata(catalog_name, schema_name, table_names, mode, base_url):
+#     METADATA_PARAMS = {
+#         "table_names": table_names
+#         }
+#     if catalog_name != "":
+#         METADATA_PARAMS["catalog_name"] = catalog_name
+#     if dest_schema != "":
+#         METADATA_PARAMS["dest_schema"] = schema_name
+#     if mode != "":
+#         METADATA_PARAMS["mode"] = mode
+#     if base_url != "":
+#         METADATA_PARAMS["base_url"] = base_url
+#         os.environ["DATABRICKS_HOST"] = base_url
+#     else:
+#         os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
+#     return METADATA_PARAMS
 
 
 @udf
