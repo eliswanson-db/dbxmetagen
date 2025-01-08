@@ -129,3 +129,6 @@ databricks/
 .env.local
 .env.*.local
 .databricks
+
+#specific folders
+**/.agents/

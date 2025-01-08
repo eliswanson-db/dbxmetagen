@@ -10,6 +10,9 @@ While Databricks does offer [AI Generated Documentation](https://docs.databricks
 ### Disclaimer
 AI generated comments are not always accurate and comment DDLs should be reviewed prior to modifying your tables. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. 
 
+Unless explicitly set not to, this utility does inspect data and send it to the model endpoint specified. 
+
+
 ### Solution Overview:
 There are a few key sections in this notebook: 
 - Library installs and setup using the config referenced in `dbxmetagen/src/config.py`
@@ -28,6 +31,8 @@ There are a few key sections in this notebook:
 1. If cloned locally, recommend using asset bundle build to create and run a workflow.
 1. Either create a catalog or use an existing one.
 1. Set the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
+   1. Make sure to check the options for add_metadata and apply_ddl and set them correctly. Add metadata will run a describe extended on every column and use the metadata in table descriptions, though ANALYZE ... COLUMNS will need to have been run to get useful information from this.
+   2. You also can adjust sample_size, columns_per_call, and ACRO_CONTENT.
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Current status
@@ -47,13 +52,13 @@ There are a few key sections in this notebook:
 1. Add flag for inclusion of metadata - Done
 1. Add flag for direct commenting of tables - Done
 1. Add flag for dry run of direct commenting - Done
-1. Adjust prompts and few-shot examples to reduce errors and improve comments
+1. Summarizer step for table comments - Done
+1. Adjust prompts and few-shot examples to reduce errors and improve comments - Done
 1. Add a retry for get_response with a double injection reminder to only respond with the provided schema.
 1. Register as a UC model to allow tracking and iteration of prompts
 1. Expand detail in audit logs
 1. register a pyfunc so that we can iterate on prompts
 1. Separate out table comments into its own Response
-1. Summarizer step for table comments
 1. Add async
 1. any utility of agent framework?
 1. Fix input data classes
