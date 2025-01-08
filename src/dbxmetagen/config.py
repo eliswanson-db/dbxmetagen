@@ -23,6 +23,14 @@ class MetadataConfig:
         "apply_ddl": False, 
         "dry_run": False,
     }
+    MODEL_PARAMS = {
+        "max_prompt_length": 5000,
+        "columns_per_call": 5,
+        "sample_size": 5,
+        "max_tokens": 5000,
+        "temperature": 0.1,
+        "add_metadata": True,
+    }
     
     def __init__(self, **kwargs):
         self.setup_params = self.__class__.SETUP_PARAMS

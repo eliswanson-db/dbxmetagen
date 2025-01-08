@@ -160,6 +160,25 @@ with mlflow.start_run():
 
 """Will need to figure out how to get the evaluation to work with a list of dicts as the prompt."""
 
+#     results = mlflow.evaluate(
+#         model_info.model_uri,
+#         eval_data,
+#         targets=prediction,
+#         model_type="question-answering",
+#     )
+#     print(f"See aggregated evaluation results below: \n{results.metrics}")
+
+#     # Evaluation result for each data record is available in `results.tables`.
+#     eval_table = results.tables["eval_results_table"]
+#     print(f"See evaluation table below: \n{eval_table}")
+
+# from mlflow.tracking import MlflowClient
+
+# def get_latest_model_version(model_name):
+#     client = MlflowClient()
+#     model_version_infos = client.search_model_versions(f"name = '{model_name}'")
+#     latest_model_version = max([int(model_version_info.version) for model_version_info in model_version_infos])
+#     return latest_model_version
     
 latest_model_version = get_latest_model_version("dbxmetagen.default.comment_generator_model")
 
