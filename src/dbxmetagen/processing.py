@@ -32,6 +32,7 @@ class DDLGenerator(ABC):
         pass
 
 class Input(BaseModel):
+    ### Currently not implemented.
     model_config = ConfigDict(extra="forbid")
 
     table_name: str
@@ -44,12 +45,14 @@ class Input(BaseModel):
         }
 
 class PInput(Input):
-    
+    ### Currently not implemented.
+
     column_contents: List[Dict[str, Any]]
 
 
 class CommentInput(Input):
-    
+    ### Currently not implemented.
+
     column_contents: List[List[Any]]
 
 
@@ -490,15 +493,6 @@ def choose_registered_model(config, df, full_table_name):
     pass
 
 
-# def choose_generator_class(config):
-#     if config.mode == "comment":
-#         return CommentGenerator(config, df, full_table_name)
-#     elif config.mode == "pi":
-#         return PIIdentifier(config, df, full_table_name)
-#     else:
-#         raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
-
-
 def review_and_generate_metadata(
     config: MetadataConfig,
     full_table_name: str
@@ -768,23 +762,6 @@ def split_table_names(table_names: str) -> List[str]:
         return []
     return table_names.split(',')
 
-# def instantiate_metadata(catalog_name, schema_name, table_names, mode, base_url):
-#     METADATA_PARAMS = {
-#         "table_names": table_names
-#         }
-#     if catalog_name != "":
-#         METADATA_PARAMS["catalog_name"] = catalog_name
-#     if dest_schema != "":
-#         METADATA_PARAMS["dest_schema"] = schema_name
-#     if mode != "":
-#         METADATA_PARAMS["mode"] = mode
-#     if base_url != "":
-#         METADATA_PARAMS["base_url"] = base_url
-#         os.environ["DATABRICKS_HOST"] = base_url
-#     else:
-#         os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
-#     return METADATA_PARAMS
-
 
 @udf
 def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
@@ -818,21 +795,21 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     return ddl_statement
 
 
-@udf
-def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
-    """
-    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
+# @udf
+# def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
+#     """
+#     Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
 
-    Args:
-        table_name (str): The name of the table to create.
-        column_name (str): The schema of the table.
-        pi_tag (str): The schema of the table.
+#     Args:
+#         table_name (str): The name of the table to create.
+#         column_name (str): The schema of the table.
+#         pi_tag (str): The schema of the table.
 
-    Returns:
-        str: The DDL statement for adding the pi tag to the table.
-    """
-    ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
-    return ddl_statement
+#     Returns:
+#         str: The DDL statement for adding the pi tag to the table.
+#     """
+#     ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
+#     return ddl_statement
 
 
 @udf

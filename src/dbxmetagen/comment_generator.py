@@ -6,14 +6,6 @@ from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.metadata_generator import PIResponse
 
 
-# class CommentGeneratorModel(CommentGenerator, mlflow.pyfunc.PythonModel):
-#     def load_context(self, context):
-#         pass
-    
-#     def predict(self, model_input, params=None):
-#         #return self.get_responses(self.config, model_input)
-#         return self.predict_chat_response(self.config, model_input)
-
 class CommentGeneratorModel(CommentGenerator, mlflow.pyfunc.PythonModel):
     def load_context(self, context):
         pass
@@ -28,6 +20,3 @@ class CommentGeneratorModel(CommentGenerator, mlflow.pyfunc.PythonModel):
             temperature=self.config['temperature']
         )
         return self.chat_response
-
-
-# mlflow.models.set_model(CommentGeneratorModel())

@@ -97,7 +97,6 @@ from src.dbxmetagen.processing import (
     upsert_table_names_to_control_table,
     load_table_names_from_csv,
     split_table_names,
-    instantiate_metadata,
     generate_table_comment_ddl,
     generate_column_comment_ddl,
     generate_pi_information_ddl,

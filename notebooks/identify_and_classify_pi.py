@@ -97,7 +97,6 @@ from src.dbxmetagen.processing import (
     upsert_table_names_to_control_table,
     load_table_names_from_csv,
     split_table_names,
-    instantiate_metadata,
     generate_table_comment_ddl,
     generate_column_comment_ddl,
     generate_pi_information_ddl,
@@ -115,7 +114,7 @@ from src.dbxmetagen.error_handling import exponential_backoff
 dbutils.widgets.text("catalog_name", "dbxmetagen")
 dbutils.widgets.text("dest_schema", "metadata_results")
 dbutils.widgets.text("table_names", "")
-dbutils.widgets.text("mode", "comment")
+dbutils.widgets.text("mode", "pi")
 dbutils.widgets.text("base_url", "https://adb-830292400663869.9.azuredatabricks.net")
 
 # COMMAND ----------
@@ -142,6 +141,10 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 
 # MAGIC %md
 # MAGIC ### Now run the code - this may take some time depending on how many tables/columns you are running and what your tokens/sec throughput on the LLM is. 
+
+# COMMAND ----------
+
+spark.sql(f"DESCRIBE EXTENDED dbxmetagen.default.attainable_yields sugarbeet_attainable").display()
 
 # COMMAND ----------
 

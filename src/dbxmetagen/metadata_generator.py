@@ -40,6 +40,10 @@ class SummaryCommentResponse(Response):
 
 
 class MetadataGenerator(ABC):
+    @property
+    def openai_client(self):
+        return OpenAI(api_key=os.environ["DATABRICKS_TOKEN"], base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
+
     def from_context(self, config):
         self.config = config
 
@@ -49,17 +53,13 @@ class MetadataGenerator(ABC):
 
 
 class CommentGenerator(MetadataGenerator):
-    @property
-    def openai_client(self):
-        return OpenAI(api_key=os.environ["DATABRICKS_TOKEN"], base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
-
     def get_responses(self, config, prompt, prompt_content) -> Tuple[CommentResponse, ChatCompletion]:
         if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         comment_response, message_payload = self.get_comment_response(
             self.config, 
             content=prompt_content, 
-            prompt_content=prompt['comment'], 
+            prompt_content=prompt[self.config.mode], 
             model=self.config.model, 
             max_tokens=self.config.max_tokens, 
             temperature=self.config.temperature
@@ -141,32 +141,37 @@ class CommentGenerator(MetadataGenerator):
 
 
 class PIIdentifier(MetadataGenerator):
-    def __init__(self, config, prompt):
-        super().__init__(config, prompt)
-
-    def get_responses(self, config, df, full_table_name) -> Tuple[PIResponse, PIResponse]:
-        prompt = PromptFactory.create_prompt(config, df, full_table_name)
+    def get_responses(self, config, prompt, prompt_content) -> Tuple[CommentResponse, ChatCompletion]:
         if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        pi_response, message_payload = self.get_pi_response(
+        comment_response, message_payload = self.get_comment_response(
             self.config, 
-            content=self.df, 
-            prompt_content=prompt['pi'], 
+            content=prompt_content, 
+            prompt_content=prompt[self.config.mode], 
             model=self.config.model, 
             max_tokens=self.config.max_tokens, 
             temperature=self.config.temperature
         )
-        return pi_response, message_payload
+        return comment_response, message_payload
+    
+    def predict_chat_response(self, prompt_content):
+        self.chat_response = self.openai_client.chat.completions.create(
+            messages=prompt_content,
+            model=self.config.model,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature
+        )
+        return self.chat_response
 
-    def get_pi_response(self, 
-                        config: MetadataConfig,
-                        content: str, 
-                        prompt_content: str, 
-                        model: str, 
-                        max_tokens: int, 
-                        temperature: float,
-                        retries: int = 0, 
-                        max_retries: int = 5) -> Tuple[PIResponse, Dict[str, Any]]:
+    def get_comment_response(self, 
+                             config: MetadataConfig,
+                             content: str, 
+                             prompt_content: str, 
+                             model: str, 
+                             max_tokens: int, 
+                             temperature: float,
+                             retries: int = 0, 
+                             max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
         try:
             chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
             response_payload = chat_completion.choices[0].message
@@ -184,7 +189,7 @@ class PIIdentifier(MetadataGenerator):
 
     def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
         try:
-            return self.predict(prompt_content)
+            return self.predict_chat_response(prompt_content)
         except Exception as e:
             if retries < max_retries:
                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
@@ -221,15 +226,102 @@ class PIIdentifier(MetadataGenerator):
         if not (list_matches_keys and keys_match_list):
             return False
         return True
+    
+
+# class PIIdentifier(MetadataGenerator):
+#     def __init__(self, config, prompt):
+#         super().__init__(config, prompt)
+
+#     def get_responses(self, config, df, full_table_name) -> Tuple[PIResponse, PIResponse]:
+#         prompt = PromptFactory.create_prompt(config, df, full_table_name)
+#         if len(prompt) > self.config.max_prompt_length:
+#             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
+#         pi_response, message_payload = self.get_pi_response(
+#             self.config, 
+#             content=self.df, 
+#             prompt_content=prompt['pi'], 
+#             model=self.config.model, 
+#             max_tokens=self.config.max_tokens, 
+#             temperature=self.config.temperature
+#         )
+#         return pi_response, message_payload
+
+#     def get_pi_response(self, 
+#                         config: MetadataConfig,
+#                         content: str, 
+#                         prompt_content: str, 
+#                         model: str, 
+#                         max_tokens: int, 
+#                         temperature: float,
+#                         retries: int = 0, 
+#                         max_retries: int = 5) -> Tuple[PIResponse, Dict[str, Any]]:
+#         try:
+#             chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+#             response_payload = chat_completion.choices[0].message
+#             response_dict = self._parse_response(response_payload.content)
+#             self._validate_response(content, response_dict)
+#             chat_response = PIResponse(**response_dict)
+#             return chat_response, response_payload
+#         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
+#             if retries < max_retries:
+#                 print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
+#                 return self.get_pi_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+#             else:
+#                 print("Validation error - response")
+#                 raise ValueError(f"Validation error after {max_retries} attempts: {e}")
+
+#     def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
+#         try:
+#             return self.predict(prompt_content)
+#         except Exception as e:
+#             if retries < max_retries:
+#                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
+#                 exponential_backoff(retries)
+#                 return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+#             else:
+#                 print(f"Failed after {max_retries} retries.")
+#                 raise e
+
+#     def _parse_response(self, response: str) -> Dict[str, Any]:
+#         try:
+#             response_dict = json.loads(response)
+#             if not isinstance(response_dict, dict):
+#                 raise ValueError("Response is not a valid dict")
+#             return response_dict
+#         except json.JSONDecodeError as e:
+#             raise ValueError(f"JSON decode error: {e}")
+
+#     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
+#         if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
+#             raise ValueError("Column names do not match column contents")
+    
+#     @staticmethod
+#     def _check_list_and_dict_keys_match(dict_list, string_list):
+#         if isinstance(dict_list, list):
+#             dict_keys = dict_list
+#         else:
+#             try:
+#                 dict_keys = dict_list.keys()
+#             except: 
+#                 raise TypeError("dict_list is not a list or a dictionary")
+#         list_matches_keys = all(item in dict_keys for item in string_list)
+#         keys_match_list = all(key in string_list for key in dict_keys)
+#         if not (list_matches_keys and keys_match_list):
+#             return False
+#         return True
 
 
 class MetadataGeneratorFactory:
     @staticmethod
     def create_generator(config) -> MetadataGenerator:
         if config.mode == "comment":
-            return CommentGenerator(config)
+            generator = CommentGenerator()
+            generator.from_context(config)
+            return generator
         elif config.mode == "pi":
-            return PIIdentifier(config)
+            generator = PIIdentifier()
+            generator.from_context(config)
+            return generator
         else:
             raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
 
