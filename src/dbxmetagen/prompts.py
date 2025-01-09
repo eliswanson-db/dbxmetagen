@@ -293,9 +293,9 @@ class CommentNoDataPrompt(Prompt):
 class PromptFactory:
     @staticmethod
     def create_prompt(config, df, full_table_name) -> Prompt:
-        if config.mode == "comment":
+        if config.mode == "comment" and config.allow_data:
             return CommentPrompt(config, df, full_table_name)
-        elif config.mode == "comment" and config.allow_data:
+        elif config.mode == "comment":
             return CommentNoDataPrompt(config, df, full_table_name)
         elif config.mode == "pi":
             return PIPrompt(config, df, full_table_name)
