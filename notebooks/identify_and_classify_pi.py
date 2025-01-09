@@ -6,7 +6,7 @@
 
 # MAGIC %md
 # MAGIC #`dbxmetagen` Overview
-# MAGIC ### This is a utlity to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
+# MAGIC ### This is a utlity to help identify PI and classify it for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
 # MAGIC
 # MAGIC While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. 
 # MAGIC
