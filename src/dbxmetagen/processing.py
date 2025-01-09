@@ -360,6 +360,9 @@ def filter_and_write_ddl(df: DataFrame,
         current_user: str
         current_date: str
     """
+    print("Starting filter and write ddl")
+    df.count()
+    display(df)
     df = df.filter(df['table'] == full_table_name)
     print("df filtering...")
     print("checking if df is a real thing")
@@ -625,11 +628,13 @@ def setup_ddl(config: MetadataConfig) -> None:
             - volume_name (str): The volume name.
     """
     spark = SparkSession.builder.getOrCreate()
+    ### Add error handling here
     if config.dest_schema:
         spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog}.{config.dest_schema}")
 
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.volume_name}")
+
 
 def create_tables(config: MetadataConfig) -> None:
     """

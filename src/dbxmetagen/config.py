@@ -16,7 +16,7 @@ class MetadataConfig:
         "control_table": "metadata_control",
         "apply_ddl": False, 
         "dry_run": False, #What should a dry run actually do? Provide test data?
-        "pi_classification_rules": """if the content of a column is like {"appointment_text": "John Johnson has high blood pressure"}, then the classification should be "phi" and if a column appears to be a credit card number or a bank account number then it should be labeled as "pci". 'type' values allowed include 'name', 'location', 'national ID', 'email', and 'phone'. If the confidence is less than 0.5, then the classification should be 'none'."""
+        "pi_classification_rules": """if the content of a column is like {"appointment_text": "John Johnson has high blood pressure"}, then the classification should be "phi" and if a column appears to be a credit card number or a bank account number then it should be labeled as "pci". 'type' values allowed include 'name', 'location', 'national ID', 'email', and 'phone'. If the confidence is less than 0.5, then the classification should be 'none'.""" # These rules are only used in PI identification and classification.
     }
     MODEL_PARAMS = {
         "max_prompt_length": 5000,
