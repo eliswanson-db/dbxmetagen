@@ -10,7 +10,9 @@ While Databricks does offer [AI Generated Documentation](https://docs.databricks
 ### Disclaimer
 
 AI generated comments are not always accurate and comment DDLs should be reviewed prior to modifying your tables. Examples of data may appear in column names depending on settings, and if you have specific security guidelines you may need to be aware of where and how you run your code in order to maintain appropriate data security. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies and harmful content, and to check if there are concerns with PI or other data exfiltration issues through comments. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. No guarantees are made, and human review is the responsibility of the user - this is an accelerator, not a replacement for human domain knowledge. 
-Unless explicitly set not to, this utility does inspect data and send it to the model endpoint specified.
+Unless explicitly set not to, this utility does inspect data and send it to the model endpoint specified. 
+
+Requirements such as HIPAA compliance must be considered by the customer in light of their infrastructure and the model used. For example, the default PPT foundational models are not HIPAA compliant, and customers must choose an option such as a provisioned throughput endpoint or a HIPAA-compliant OpenAI external model. Compliance is the responsibility of the user.
 
 ### Solution Overview:
 There are a few key sections in this notebook: 
