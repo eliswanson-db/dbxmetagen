@@ -9,6 +9,7 @@ import json
 import re
 from typing import List, Dict, Any, Literal, Tuple
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, Row
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
 from pyspark.sql.functions import col, struct, to_timestamp, current_timestamp, lit, when, sum as spark_sum, concat_ws, collect_list
 from typing import List, Dict, Any
 from pyspark.sql import DataFrame, Row
@@ -150,7 +151,7 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     return filtered_df.limit(sample_size)
 
 
-def append_table_row(rows: List[Row], full_table_name: str, response: Dict[str, Any], tokenized_full_table_name: str) -> List[Row]:
+def append_table_row(config: MetadataConfig, rows: List[Row], full_table_name: str, response: Dict[str, Any], tokenized_full_table_name: str) -> List[Row]:
     """
     Appends a table row to the list of rows.
 
@@ -165,7 +166,7 @@ def append_table_row(rows: List[Row], full_table_name: str, response: Dict[str, 
     row = Row(
         table=full_table_name,
         tokenized_table=tokenized_full_table_name,        
-        comment_type='table',
+        ddl_type='table',
         column_name='None',
         column_content=response.table,
         _created_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),     
@@ -174,7 +175,7 @@ def append_table_row(rows: List[Row], full_table_name: str, response: Dict[str, 
     return rows
 
 
-def append_column_rows(rows: List[Row], full_table_name: str, response: Dict[str, Any], tokenized_full_table_name: str) -> List[Row]:
+def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name: str, response: Dict[str, Any], tokenized_full_table_name: str) -> List[Row]:
     """
     Appends column rows to the list of rows.
 
@@ -187,20 +188,20 @@ def append_column_rows(rows: List[Row], full_table_name: str, response: Dict[str
         List[Row]: The updated list of rows with the new column rows appended.
     """
     for column_name, column_content in zip(response.columns, response.column_contents):
-        if isinstance(column_content, dict):   
+        if isinstance(column_content, dict) and config.mode == "pi":   
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,        
-                comment_type='column',
+                ddl_type='column',
                 column_name=column_name,
                 **column_content,
                 _created_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             )
-        elif isinstance(column_content, str):
+        elif isinstance(column_content, str) and config.mode == "comment":
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,        
-                comment_type='column',
+                ddl_type='column',
                 column_name=column_name,
                 column_content=column_content,
                 _created_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -222,7 +223,10 @@ def rows_to_df(rows: List[Row]) -> DataFrame:
         DataFrame: The Spark DataFrame created from the list of rows.
     """
     spark = SparkSession.builder.getOrCreate()
-    return spark.createDataFrame(rows)
+    if len(rows) == 0:
+        return None
+    else:
+        return spark.createDataFrame(rows)
 
 
 def add_ddl_to_column_comment_df(df: DataFrame, ddl_column: str) -> DataFrame:
@@ -253,6 +257,20 @@ def add_ddl_to_table_comment_df(df: DataFrame, ddl_column: str) -> DataFrame:
     return df.withColumn(ddl_column, generate_table_comment_ddl('tokenized_table', 'column_content'))
 
 
+def add_table_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
+    """
+    Adds a DDL statement to a DataFrame for PI information.
+
+    Args:
+        df (DataFrame): The DataFrame to add the DDL statement to.
+        ddl_column (str): The name of the DDL column.
+
+    Returns:
+        DataFrame: The updated DataFrame with the DDL statement added.
+    """
+    return df.withColumn(ddl_column, generate_table_pi_information_ddl('tokenized_table', 'pi_type'))
+
+
 def add_column_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
     """
     Adds a DDL statement to a DataFrame for PI information.
@@ -264,7 +282,7 @@ def add_column_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    return df.withColumn("ddl", generate_pi_information_ddl('tokenized_table', 'column_name', 'column_content'))
+    return df.withColumn(ddl_column, generate_pi_information_ddl('tokenized_table', 'column_name', 'type'))
 
 
 def get_current_user() -> str:
@@ -305,14 +323,15 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
 
 
 def populate_log_table(df, config, current_user, base_path):
-        return (df.withColumn("current_user", lit(current_user))
-          .withColumn("model", lit(config.model))
-          .withColumn("sample_size", lit(config.sample_size))
-          .withColumn("max_tokens", lit(config.max_tokens))
-          .withColumn("temperature", lit(config.temperature))
-          .withColumn("columns_per_call", lit(config.columns_per_call))
-          .withColumn("status", lit("No Volume specified..."))
-        )
+    return (df.withColumn("current_user", lit(current_user))
+                .withColumn("model", lit(config.model))
+                .withColumn("sample_size", lit(config.sample_size))
+                .withColumn("max_tokens", lit(config.max_tokens))
+                .withColumn("temperature", lit(config.temperature))
+                .withColumn("columns_per_call", lit(config.columns_per_call))
+                .withColumn("status", lit("No Volume specified..."))
+            )
+    
 
 
 def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
@@ -339,7 +358,9 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
 
 
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:   
-    df.write.mode('append').saveAsTable(f"{config.catalog}.{config.dest_schema}.metadata_generation_log")
+    df.write.mode('append') \
+        .option("mergeSchema", "true") \
+        .saveAsTable(f"{config.catalog}.{config.dest_schema}.{config.mode}_metadata_generation_log")
     mark_as_deleted(table_name, config)
 
 
@@ -360,14 +381,8 @@ def filter_and_write_ddl(df: DataFrame,
         current_user: str
         current_date: str
     """
-    print("Starting filter and write ddl")
-    df.count()
-    display(df)
+    print("Filtering dataframe based on table name to write DDL to SQL file in volume...")
     df = df.filter(df['table'] == full_table_name)
-    print("df filtering...")
-    print("checking if df is a real thing")
-    print(".....")
-    display(df)
     ddl_statements = df.select("ddl").collect()
     table_name = re.sub(r'[^\w\s/]', '_', full_table_name)
     file_path = os.path.join(base_path, f"{table_name}.sql")
@@ -428,13 +443,12 @@ def create_and_persist_ddl(df: DataFrame,
     if config.volume_name:
         base_path = f"/Volumes/{config.catalog}/{config.dest_schema}/{config.volume_name}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
-        table_df = df[f'{config.mode}_table_df']
+        table_df = df[f'{config.mode}_table_df']        
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         filter_and_write_ddl(table_df, config, modified_path, table_name, current_user, current_date)
         print(f"Writing DDL for {table_name} for columns...")
         column_df = df[f'{config.mode}_column_df']
-        "Column df..."
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         filter_and_write_ddl(column_df, config, modified_path, table_name, current_user, current_date)
@@ -479,7 +493,6 @@ def get_generated_metadata(
             chat_response = MetadataGeneratorFactory.create_generator(config)
         response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
         responses.append(response)
-    print(responses)
     return responses
 
 
@@ -519,9 +532,9 @@ def review_and_generate_metadata(
     responses = get_generated_metadata(config, full_table_name)
     for response in responses:
         tokenized_full_table_name = replace_catalog_name(config, full_table_name)
-        print("response:", response)
-        table_rows = append_table_row(table_rows, full_table_name, response, tokenized_full_table_name)
-        column_rows = append_column_rows(column_rows, full_table_name, response, tokenized_full_table_name)
+        if config.mode == 'comment':
+            table_rows = append_table_row(config, table_rows, full_table_name, response, tokenized_full_table_name)
+        column_rows = append_column_rows(config, column_rows, full_table_name, response, tokenized_full_table_name)
     return rows_to_df(column_rows), rows_to_df(table_rows)
 
 
@@ -554,11 +567,6 @@ def apply_comment_ddl(df: DataFrame, config: MetadataConfig) -> None:
         df (DataFrame): The DataFrame containing the DDL statements.
     """
     spark = SparkSession.builder.getOrCreate()
-    print("df filtering...")
-    print("checking if df is a real thing")
-    print(".....")
-    print(df.columns)
-    display(df)
     ddl_statements = df.select("ddl").collect()
     for row in ddl_statements:
         ddl_statement = row["ddl"]
@@ -595,12 +603,35 @@ def add_ddl_to_dfs(config, table_df, column_df, table_name):
             apply_comment_ddl(dfs['comment_table_df'], config)
             apply_comment_ddl(dfs['comment_column_df'], config)
     elif config.mode == "pi":
-        table_df = add_column_ddl_to_pi_df(table_df, "ddl")
-        dfs['pi_table_df'] = table_df.limit(1)
-        dfs['pi_column_df'] = column_df
+        dfs['pi_column_df'] = add_column_ddl_to_pi_df(column_df, "ddl")
+        dfs['pi_table_df'] = create_pi_table_df(dfs['pi_column_df'], table_name)
     else:
         raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
     return dfs
+
+
+
+def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
+    """
+    Creates a DataFrame for PI information at the table level. Can be expanded to indicate the type of PI, but for tables it's a little more complicated because they can contain multiple, or even have PI that results from multiple columns, such as PHI that are not present in individual columns.
+
+    # TODO: Implement a summarizer that looks for this.
+
+    Args:
+        column_df (DataFrame): The DataFrame containing PI information at the column level.
+        table_name (str): The name of the table.
+
+    Returns:
+        DataFrame: A DataFrame with PI information at the table level.
+    """
+    pi_rows = column_df.filter(col("type").isNotNull())
+
+    if pi_rows.count() > 0:
+        pi_table_row = pi_rows.limit(1).withColumn("column_name", lit("None")) \
+                                         .withColumn("type", lit("table")) \
+                                         .withColumn("classification", lit("pi")) \
+                                         .withColumn("table_name", lit(table_name))
+        return pi_table_row.select(column_df.columns)
 
 
 # TODO move to Response class
@@ -644,7 +675,7 @@ def create_tables(config: MetadataConfig) -> None:
         setup_params (Dict[str, Any]): A dictionary containing setup parameters including:
             - catalog (str): The catalog name.
             - dest_schema (str): The destination schema name.
-            - control_table (str): The volume name.
+            - control_table (str): The destination table used for tracking table queue.
     """
     spark = SparkSession.builder.getOrCreate()
     if config.control_table:
@@ -678,7 +709,8 @@ def generate_and_persist_comments(config) -> None:
     """
     for table in config.table_names:
         print(f"Processing table {table}...")        
-        df = process_and_add_ddl(config, table)        
+        df = process_and_add_ddl(config, table)
+        display(df)
         print(f"Generating and persisting ddl for {table}...")
         create_and_persist_ddl(df, config, table)
 
@@ -800,25 +832,25 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     return ddl_statement
 
 
-# @udf
-# def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
-#     """
-#     Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
+@udf
+def generate_table_pi_information_ddl(table_name: str, pi_type: str) -> str:
+    """
+    Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
 
-#     Args:
-#         table_name (str): The name of the table to create.
-#         column_name (str): The schema of the table.
-#         pi_tag (str): The schema of the table.
+    Args:
+        table_name (str): The name of the table to create.
+        column_name (str): The schema of the table.
+        pi_tag (str): The schema of the table.
 
-#     Returns:
-#         str: The DDL statement for adding the pi tag to the table.
-#     """
-#     ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
-#     return ddl_statement
+    Returns:
+        str: The DDL statement for adding the pi tag to the table.
+    """
+    ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('has_pi' = '{pi_type}');"
+    return ddl_statement
 
 
 @udf
-def generate_pi_information_ddl(table_name: str, column_name: str, pi_tag: str, pi_type: str) -> str:
+def generate_pi_information_ddl(table_name: str, column_name: str, pi_type: str) -> str:
     """
     Generates a DDL statement for ALTER TABLE that will tag a column with information about pi.
 
@@ -842,5 +874,7 @@ def main(metadata_params):
     queue = setup_queue(config)
     if config.control_table:
         upsert_table_names_to_control_table(queue, config)
-    config.table_names.extend(queue)
+    config.table_names = list(set(config.table_names).union(set(queue)))
+    #config.table_names.extend(queue)
+    print(config.table_names)
     generate_and_persist_comments(config)
