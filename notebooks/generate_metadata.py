@@ -91,7 +91,7 @@ from src.dbxmetagen.processing import (
     setup_ddl,
     create_tables,
     instantiate_metadata_objects,
-    generate_and_persist_comments,
+    generate_and_persist_metadata,
     setup_queue,
     ensure_fully_scoped_table_names,
     upsert_table_names_to_control_table,

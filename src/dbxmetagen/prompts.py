@@ -37,7 +37,7 @@ class CommentPrompt(Prompt):
         column_metadata_dict = {}
         for column_name in self.prompt_content['column_contents']['columns']:
             extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
             )            
             filtered_metadata_df = extended_metadata_df.filter(
                 (extended_metadata_df["info_value"] != "NULL") &
@@ -134,7 +134,7 @@ class PIPrompt(Prompt):
         column_metadata_dict = {}
         for column_name in self.prompt_content['column_contents']['columns']:
             extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
             )            
             filtered_metadata_df = extended_metadata_df.filter(
                 (extended_metadata_df["info_value"] != "NULL")
@@ -169,13 +169,12 @@ class PIPrompt(Prompt):
                     Specific Considerations
                     1. pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another.
                     2. Please don't respond with anything other than the dictionary.
-                    3. Attempt to classify into PI, PII, PCI, and PHI based on common definitions. If definitions are provided in the content then use them.
+                    3. Attempt to classify into PI, PII, PCI, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
 
                     ### 
-                    
-                    PI Classification Rules: {pi_classification_rules}
-
-                    """ 
+                    """
+                    + 
+                    f"""PI Classification Rules: {self.config.pi_classification_rules}.""" 
                 },
                 {
                     "role": "user",
@@ -221,7 +220,7 @@ class CommentNoDataPrompt(Prompt):
         column_metadata_dict = {}
         for column_name in self.prompt_content['column_contents']['columns']:
             extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} {column_name}"
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
             )            
             filtered_metadata_df = extended_metadata_df.filter(
                 (extended_metadata_df["info_value"] != "NULL") &
