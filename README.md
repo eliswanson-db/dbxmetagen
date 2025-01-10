@@ -26,18 +26,20 @@ There are a few key sections in this notebook:
 
 ### Setup
 1. Clone the Repo into Databricks or locally
-1. If cloned into Repos in Databricks, can run the notebook using an all-purpose cluster without further deployment.
+1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster without further deployment.
    1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
-1. If cloned locally, recommend using asset bundle build to create and run a workflow.
-1. Either create a catalog or use an existing one.
+1. If cloned locally, we recommend using Databricks asset bundle build to create and run a workflow.
+1. Either create a catalog or use an existing one. Default catalog is called dbxmetagen.
 1. Set the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
    1. Make sure to check the options for add_metadata and apply_ddl and set them correctly. Add metadata will run a describe extended on every column and use the metadata in table descriptions, though ANALYZE ... COLUMNS will need to have been run to get useful information from this.
-   2. You also can adjust sample_size, columns_per_call, and ACRO_CONTENT.
+   1. You also can adjust sample_size, columns_per_call, and ACRO_CONTENT.
+   1. Point to a test table to start, though by default DDL will not be applied, instead it will only be generated and added to .sql files in the volume generated_metadata.
+   1. Settings in the notebook widgets will override settings in config.py, so make sure the widgets in the main notebook are updated appropriately.
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Current status
 1. Tested on DBR 15.4ML LTS
-1. Currently creates ALTER scripts and puts in a volume. Tested in a databricks workspace.
+1. Default settings currently create ALTER scripts and puts in a volume. Tested in a databricks workspace.
 1. Some print-based logging to make understanding what's happening and debugging easy in the UI
 
 ### Discussion points:
@@ -47,18 +49,3 @@ There are a few key sections in this notebook:
 1. One of the easiest ways to speed this up and get terser answers is to ramp up the columns per call - compare 5 and 50 for example.
 1. Larger chunks will result in simpler comments with less creativity and elaboration.
 
-### Future Items
-1. Fix sampling - Done
-1. Add flag for inclusion of metadata - Done
-1. Add flag for direct commenting of tables - Done
-1. Add flag for dry run of direct commenting - Done
-1. Summarizer step for table comments - Done
-1. Adjust prompts and few-shot examples to reduce errors and improve comments - Done
-1. Add a retry for get_response with a double injection reminder to only respond with the provided schema.
-1. Register as a UC model to allow tracking and iteration of prompts
-1. Expand detail in audit logs
-1. register a pyfunc so that we can iterate on prompts
-1. Separate out table comments into its own Response
-1. Add async
-1. any utility of agent framework?
-1. Fix input data classes

@@ -124,16 +124,7 @@ dest_schema = dbutils.widgets.get("dest_schema")
 table_names = split_table_names(dbutils.widgets.get("table_names"))
 mode = dbutils.widgets.get("mode")
 base_url = dbutils.widgets.get("base_url")
-
-# COMMAND ----------
-
-### Set instance variables as needed.
-### Variables set in the config will be overridden by the values passed in the notebook through widgets.
 METADATA_PARAMS = instantiate_metadata_objects(catalog_name, dest_schema, table_names, mode, base_url)
-
-# COMMAND ----------
-
-### Set key for authenticating to AI Gateway
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
 
@@ -145,7 +136,3 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 # COMMAND ----------
 
 main(METADATA_PARAMS)
-
-# COMMAND ----------
-
-
