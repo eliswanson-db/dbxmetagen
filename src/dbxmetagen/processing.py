@@ -10,7 +10,7 @@ import re
 from typing import List, Dict, Any, Literal, Tuple
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, Row
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
-from pyspark.sql.functions import col, struct, to_timestamp, current_timestamp, lit, when, sum as spark_sum, concat_ws, collect_list
+from pyspark.sql.functions import col, struct, to_timestamp, current_timestamp, lit, when, sum as spark_sum, max as spark_max, concat_ws, collect_list, collect_set
 from typing import List, Dict, Any
 from pyspark.sql import DataFrame, Row
 import nest_asyncio
@@ -114,7 +114,7 @@ def chunk_df(df: DataFrame, columns_per_call: int = 5) -> List[DataFrame]:
 
 def get_extended_metadata_for_column(config, table_name, column_name):
     spark = SparkSession.builder.getOrCreate()
-    query = f"""DESCRIBE EXTENDED {config.catalog}.{config.dest_schema}.{table_name} {column_name};"""
+    query = f"""DESCRIBE EXTENDED {config.catalog}.{config.dest_schema}.{table_name} `{column_name}`;"""
     return spark.sql(query)
     
 
@@ -268,7 +268,7 @@ def add_table_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    return df.withColumn(ddl_column, generate_table_pi_information_ddl('tokenized_table', 'pi_type'))
+    return df.withColumn(ddl_column, generate_table_pi_information_ddl('tokenized_table', 'type'))
 
 
 def add_column_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
@@ -312,7 +312,7 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
     Returns:
         str: The path to the SQL file.
     """
-    print("df to sql file")
+    print("Converting dataframe to SQL file...")
     selected_column_df = df.select(sql_column)
     column_list = [row[sql_column] for row in selected_column_df.collect()]
     uc_volume_path = f"/Volumes/{catalog_name}/{dest_schema_name}/{filename}.sql"
@@ -343,16 +343,13 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
-    print(table_name)
     control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
-    print(control_table)
     update_query = f"""
     UPDATE {control_table}
     SET _deleted_at = current_timestamp(), 
         _updated_at = current_timestamp()
     WHERE table_name = '{table_name}'
     """
-    print(update_query)
     spark.sql(update_query)
     print(f"Marked {table_name} as deleted in the control table...")
 
@@ -412,7 +409,6 @@ def write_ddl_to_volume(file_path: str, base_path: str, ddl_statements: List[str
         base_path (str): The base path where the file will be created.
         ddl_statements (List[str]): A list of DDL statements to write to the file.
     """
-    print("write ddl to volume")
     try:
         create_folder_if_not_exists(base_path)
     except Exception as e:
@@ -458,7 +454,6 @@ def create_and_persist_ddl(df: DataFrame,
         log_metadata_generation(table_df, config)
         column_df = populate_log_table(df['comment_column_df'], config, current_user, base_path)
         log_metadata_generation(column_df, config)
-
 
 
 def get_generated_metadata(
@@ -555,7 +550,6 @@ def replace_catalog_name(config, full_table_name):
         raise ValueError("full_table_name must be in the format 'catalog.schema.table'")
     catalog_name, schema_name, table_name = parts
     replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
-    
     return f"{replaced_catalog_name}.{schema_name}.{table_name}"
 
 
@@ -625,16 +619,47 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
         DataFrame: A DataFrame with PI information at the table level.
     """
     pi_rows = column_df.filter(col("type").isNotNull())
+    max_confidence = pi_rows.agg(spark_max("confidence")).collect()[0][0]
+    table_classification = determine_table_classification(pi_rows)
 
-    if pi_rows.count() > 0:
-        pi_table_row = pi_rows.limit(1).withColumn("column_name", lit("None")) \
-                                         .withColumn("type", lit("table")) \
-                                         .withColumn("classification", lit("pi")) \
-                                         .withColumn("table_name", lit(table_name))
-        return pi_table_row.select(column_df.columns)
+    pi_table_row = pi_rows.limit(1).drop('ddl_type') \
+                                    .drop('confidence') \
+                                    .drop('ddl') \
+                                    .withColumn("ddl_type", lit("table")) \
+                                    .withColumn("confidence", lit(max_confidence)) \
+                                    .withColumn("column_name", lit("None")) \
+                                    .withColumn("type", lit(table_classification)) \
+                                    .withColumn("classification", lit(table_classification)) \
+                                    .withColumn("table_name", lit(table_name))         
+    pi_table_row = add_table_ddl_to_pi_df(pi_table_row, 'ddl')
+    return pi_table_row.select(column_df.columns)
 
 
-# TODO move to Response class
+def determine_table_classification(pi_rows: DataFrame) -> str:
+    """
+    Determines the classification based on the values in the 'classification' column of the pi_rows DataFrame.
+    Args:
+        pi_rows (DataFrame): The DataFrame containing PI information.
+    Returns:
+        str: The determined classification.
+    """
+    classification_set = set(pi_rows.select(collect_set("type")).first()[0])
+    print("Classification set: ", classification_set)
+    if classification_set == {"None"}:
+        return "None"
+    elif classification_set == {"pii", "None"} or classification_set == {"pii"}:
+        return "pii"
+    elif classification_set == {"pii", "phi"}  or classification_set == {"phi"} or classification_set == {"pii", "phi", "None"}:
+        return "phi"
+    elif classification_set == {"pci", "pii"} or classification_set == {"pci", "None"} or classification_set == {"pci", "pii", "None"}:
+        return "pci"
+    elif classification_set == {"pci", "phi"} or classification_set == {"pii", "phi", "None"} or classification_set == {"phi", "None"} or classification_set == {"pci", "phi", "None"} or classification_set == {"pci", "pii", "phi"} or classification_set == {"pci", "pii", "phi", "None"}:
+        return "all"
+    else:
+        return "Unknown"
+
+
+# TODO move to Response class?
 def summarize_table_content(table_df, config, table_name):
     """Create a new completion class for this."""
     if table_df.count() > 1:
@@ -643,7 +668,7 @@ def summarize_table_content(table_df, config, table_name):
         summary_df = table_df.limit(1).drop("column_content").withColumn("column_content", lit(summary))
         return summary_df
     elif table_df.count() == 1:
-        return table_df.limit(1)
+        return table_df
     else:
         raise ValueError("No table rows found during summarization...")
 
@@ -700,7 +725,7 @@ def instantiate_metadata_objects(catalog_name, schema_name, table_names, mode, b
     return METADATA_PARAMS
 
 
-def generate_and_persist_comments(config) -> None:
+def generate_and_persist_metadata(config) -> None:
     """
     Generates and persists comments for tables based on the provided setup and model parameters.
 
@@ -710,7 +735,6 @@ def generate_and_persist_comments(config) -> None:
     for table in config.table_names:
         print(f"Processing table {table}...")        
         df = process_and_add_ddl(config, table)
-        display(df)
         print(f"Generating and persisting ddl for {table}...")
         create_and_persist_ddl(df, config, table)
 
@@ -828,7 +852,7 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN {column_name} COMMENT "{comment}";"""
+    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{comment}";"""
     return ddl_statement
 
 
@@ -862,7 +886,7 @@ def generate_pi_information_ddl(table_name: str, column_name: str, pi_type: str)
     Returns:
         str: The DDL statement for adding the pi tag to the table.
     """
-    ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN {column_name} SET TAGS ('has_pi' = '{pi_type}');"
+    ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN `{column_name}` SET TAGS ('has_pi' = '{pi_type}');"
     return ddl_statement
 
 
@@ -875,6 +899,5 @@ def main(metadata_params):
     if config.control_table:
         upsert_table_names_to_control_table(queue, config)
     config.table_names = list(set(config.table_names).union(set(queue)))
-    #config.table_names.extend(queue)
-    print(config.table_names)
-    generate_and_persist_comments(config)
+    print("Running generate on ", config.table_names)
+    generate_and_persist_metadata(config)
