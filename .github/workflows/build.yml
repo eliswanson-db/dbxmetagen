@@ -30,7 +30,7 @@ jobs:
         poetry export -f requirements.txt --output requirements.txt --without-hashes
 
     - name: Upload requirements.txt
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: requirements
         path: requirements.txt
