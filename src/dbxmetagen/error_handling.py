@@ -1,3 +1,6 @@
+import time
+import random 
+
 def exponential_backoff(retries, base_delay=1, max_delay=120, jitter=True):
     """
     Exponential backoff with optional jitter.

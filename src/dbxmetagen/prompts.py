@@ -1,47 +1,86 @@
-def create_prompt_template(content, acro_content):
-    return {"pi":
-              [
-                {
-                    "role": "system",
-                    "content": f"You are an AI assistant trying to help identify personally identifying information. Please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content." 
-                },
-                {
-                    "role": "user",
-                    "content": f"""Please look at each column in {content} and identify if the content represents a person, an address, an email, or a potentially valid national ID for a real country and provide a probability that it represents personally identifying information - confidence - scaled from 0 to 1. In addition, provide a classification for PCI or PHI if there is some probability that these are true. 
-                    
-                    Content will be provided as a Python dictionary in a string, formatted like this example, but the table name and column names might vary: {{"table_name": "finance.restricted.monthly_recurring_revenue", "column_contents": {{"index": [0, 1], "columns": ["name", "address", "email", "ssn", "religion"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "664-35-1234", "Buddhist"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "664-35-1234", "Episcopalian"]], "column_metadata": {{'name': {{'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}}, 'address': {{'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}}, 'email': {{'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}}, 'ssn': {{'col_name': 'ssn', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}}, 'religion': {{'col_name': 'religion', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}}}}}}}}. Please provide the response as a dictionary in a string. Options for classification are 'phi', 'none', or 'pci'. phi is health information that is tied to pi.
+from abc import ABC, abstractmethod
+from typing import Dict, Any
+import pandas as pd
+from pyspark.sql import SparkSession
 
-                    pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another. Example: if the content is the example above, then the response should look like {{"table": "pi", "column_names": ["name", "address", "email", "ssn", "religion"], "column_contents": [{{"classification": "pi", "type": "name", "confidence": 0.8}}, {{"classification": "pi", "type": "address", "confidence": 0.7}}, {{"classification": "pi", "type": "email", "confidence": 0.9}}, {{"classification": "pi", "type": "national ID", "confidence": 0.5}}, {{"classification": "none", "type": "none", "confidence": 0.95}}]}}. Modifier: if the content of a column is like {{"appointment_text": "John Johnson has high blood pressure"}}, then the classification should be "phi" and if a column appears to be a credit card number or a bank account number then it should be labeled as "pci". 'type' values allowed include 'name', 'location', 'national ID', 'email', and 'phone'. If the confidence is less than 0.5, then the classification should be 'none'. 
-                    
-                    Please don't respond with any other content other than the dictionary.
-                    """
-                }
-              ],
+
+class Prompt(ABC):
+    def __init__(self, config, df, full_table_name):
+        self.config = config
+        self.df = df
+        self.full_table_name = full_table_name
+        self.prompt_content = self.convert_to_comment_input()
+        if self.config.add_metadata:
+            self.add_metadata_to_comment_input()
+        print("Instantiating chat completion response...")
+
+    @abstractmethod
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def add_metadata_to_comment_input(self) -> None:
+        pass
+
+
+
+
+class CommentPrompt(Prompt):
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        spark = SparkSession.builder.getOrCreate()
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL") &
+                (extended_metadata_df["info_name"] != "description") &
+                (extended_metadata_df["info_name"] != "comment")
+            )
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+        
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+    def create_prompt_template(self) -> Dict[str, Any]:
+        content = self.prompt_content
+        acro_content = self.config.acro_content
+        return {
               "comment":
               [
                 {
                     "role": "system",
-                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. Input will come in in this format:
+                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. 
+                    
+                    
+                    ###
+                    Input will come in in this format:
                     
                     ###
                     Input format:
-                    {"index": [0, 1], "columns": ["name", "address", "email", "ssn", "religion"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "664-35-1234", "Buddhist"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "664-35-1234", "Episcopalian"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'ssn': {'col_name': 'ssn', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'religion': {'col_name': 'religion', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}}}. 
+                    {"index": [0, 1], "columns": ["name", "address", "email", "MRR", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$1545.50", "2024-03-05", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$124555.32", "2023-01-03", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'MRR': {'col_name': 'MRR', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'eap_created': {'col_name': 'eap_created', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}. 
                     
                     ###
                     Please provide a response in this format:
                     ###
-                   {"table": "Predictable recurring revenue earned from subscriptions in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but as a string rather than as a boolean value."]} 
-
-
+                    {"table": "Predictable recurring revenue earned from subscriptions in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer name. Based on the data available in the sample, this field appears to contain both first and last name.", "Customer mailing address including both the number and street name, but at least in the sampled data not including the city, state, country, or zipcode. Stored as a string and populated in all cases. The sample has two distinct values for two rows, but the metadata makes it clear that there are 5 distinct values in the table.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "MRR (Monthly recurring revenue) from the customer in United States dollars with two decimals for cents. This field is never null and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the EAP (Enterprise Architecture Platform) or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but based on the column metadata as a string rather than as a boolean value."]} 
 
                     ###
                     Specific instructions to remember:
                     1. Do not use the exact content from the examples given in the prompt unless it really makes sense to. 
                     2. The top level index key that comes back is because this is a result from a Pandas to_dict call with a split type - this is not a column name unless it also shows up in "columns" list. 
                     3. Generate descriptions based on the data and column names provided, as well as the metadata. 
-                    4. Ensure the descriptions are detailed but concise, using between 50 to 200 for comments.
+                    4. Ensure the descriptions are detailed but concise, using between 50 to 200 words for comments.
                     5. Use all information provided for context, including catalog name, schema name, table name, column name, data, and metadata. Consider knowledge of outside sources, for example, if the table is clearly an SAP table, Salesforce table, or synthetic test table.
-                    6. Please unpack any acronyms, initialisms, and abbreviations unless they are in common parlance like SCUBA. 
+                    6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
                     7. Column contents will only represent a subset of data in the table so please provide information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample. 
                     8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
                     
@@ -63,16 +102,16 @@ def create_prompt_template(content, acro_content):
                     "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}"""
                 },
                 {   "role": "assistant",
-                    "content": """{"table": "Predictable recurring revenue earned from subscriptions in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but as a string rather than as a boolean value."]}""" 
+                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but as a string rather than as a boolean value."]}""" 
                 },
                 {
                     "role": "user",
-                    "content": """Content is here - {"table_name": "enterprise.master_data.customer_master", "column_contents": [{"name": ["John Johnson", "Alice Ericks", "Charlie J. Berens", None]}, {"address": ["123 Main St", "6789 Fake Ave", "42909 Johnsone Street, Dallas, Texas 44411-1111]}, {"cid": ["429184984", "443345555"]}, {"PN": ["(214) 555-0100", "(214) 555-0101"]}, {"email": ["jj@msn.com", "alice.ericks@aol.com"]}, {"dob": ["1980-01-01", "1980-01-02"]}} and abbreviations and acronyms are here - {"EAP: enterprise architecture platform, BU: business unit, PN: phone number, dob: date of birth"}"""
+                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}"""
                 },
-                {   "role": "assistant",
-                    "content": """{"table": "Master data for customers. Customer master data is a non-transactional information that identifies and describes a customer within a business's database. Contains customer names, addresses, phone numbers, email addresses, and date of birth. This table appears to be customer master data used enterprise-wide. There appears to be some risk of personally identifying information appearing in this table.", "columns": ["name", "address", "cid", "PN", "email", "dob"], "column_contents": ["Customer's first and last name. In some cases, middle initial is included so it's possible that this is a free form entry field or that a variety of options are available for name.", "Customer mailing address including both the number and street name, and in some cases, but not all the city, state, and zipcode. It's possible this is free entry or taken from a variety of sources. The one zipcode in the sample data apppears to be the zipcode +4.", "Customer's unique identifier. This is a 9-digit number that appears to be a customer identifier. This is a column that appears to be a customer identifier. There is a small risk that these could be social security numbers in the United States despite not being labeled as such, as the number of digits match and they're in a customer table.", "Customer's phone number, including the area code and formatted with puncuation.", "Customer's email address with domain name.", "Customer's date of birth in the form of a string, but generally formatted as yyyy-mm-dd or yyyy-dd-mm, unclear which."]}""" 
+                {   
+                    "role": "assistant",
+                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, typically on a scale of 1 to 5. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values: 'Yes' and 'No'. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}"""
                 },
-                ### Could add a third 'few-shot example' specific to each workspace or domain it's run in. It's important that you get the schema exactly right.
                 {
                     "role": "user",
                     "content": f"""Content is here - {content} and abbreviations are here - {acro_content}"""                    
@@ -82,4 +121,200 @@ def create_prompt_template(content, acro_content):
             }
 
 
-COMMENT_PROMPT = ""
+
+class PIPrompt(Prompt):
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        spark = SparkSession.builder.getOrCreate()
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL")
+            )
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+            
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+    def create_prompt_template(self) -> Dict[str, Any]:
+        content = self.prompt_content
+        acro_content = self.config.acro_content
+        return {
+            "pi": [
+                {
+                    "role": "system",
+                    "content": """You are an AI assistant trying to help identify personally identifying information. Consider the data in the sample, but please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content.
+                    
+                    ### 
+                    Input Format
+                    {"index": [0, 1], "columns": ["name", "address", "email", "MRR", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$1545.50", "2024-03-05", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$124555.32", "2023-01-03", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {{'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'MRR': {'col_name': 'MRR', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'eap_created': {'col_name': 'eap_created', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}
+
+                    ###
+                    Please provide a response in this format, putting under classification either "pi" or "none", and under type either "pii", "pci", or "phi". Do not add additional fields.
+                    ###
+
+                    {"table": "pi", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98]}
+
+                    ### 
+                    
+                    Specific Considerations
+                    1. pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another.
+                    2. Please don't respond with anything other than the dictionary.
+                    3. Attempt to classify into PI, PII, PCI, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
+
+                    ### 
+                    """
+                    + 
+                    f"""PI Classification Rules: {self.config.pi_classification_rules}.""" 
+                },
+                {
+                    "role": "user",
+                    "content": """{"index": [0, 1], "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "4111 1111 1111 1111", "MR12345", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "5500 0000 0000 0004", "MR67890", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'credit_card': {'col_name': 'credit_card', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '19', 'max_col_len': '19'}, 'medical_record': {'col_name': 'medical_record', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}"""
+                },
+                {
+                    "role": "assistant",
+                    "content": """{"table": "pi", "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pci", "confidence": 0.95}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98}]}"""
+                },
+                {
+                    "role": "user",
+                    "content": """{"index": [0, 1], "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "data": [["user123", "192.168.1.1", "sess123", "$100.00", "2024-03-05", "True"], ["user456", "192.168.1.2", "sess456", "$200.00", "2024-03-06", "False"]], "column_metadata": {'username': {'col_name': 'username', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '7', 'max_col_len': '7'}, 'ip_address': {'col_name': 'ip_address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '11', 'max_col_len': '11'}, 'session_id': {'col_name': 'session_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'purchase_amount': {'col_name': 'purchase_amount', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'transaction_date': {'col_name': 'transaction_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}, 'is_active': {'col_name': 'is_active', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}"""
+                },
+                {
+                    "role": "assistant",
+                    "content": """{"table": "pi", "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.8}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.85}, {"classification": "None", "type": "None", "confidence": 0.95}]}"""
+                },
+                {
+                    "role": "user",
+                    "content": """{"index": [0, 1], "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "data": [["Jane Doe", "P12345", "Diabetes", "Insulin", "Patient is responding well to treatment", "2023-06-15"], ["John Smith", "P67890", "Hypertension", "Medication", "Blood pressure is under control", "2023-06-16"]], "column_metadata": {'patient_name': {'col_name': 'patient_name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'patient_id': {'col_name': 'patient_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '6', 'max_col_len': '6'}, 'diagnosis': {'col_name': 'diagnosis', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'treatment': {'col_name': 'treatment', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'doctor_notes': {'col_name': 'doctor_notes', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '30', 'max_col_len': '30'}, 'appointment_date': {'col_name': 'appointment_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}}}"""
+                },
+                {
+                    "role": "assistant",
+                    "content": """{"table": "pi", "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "column_contents": [{"classification": "pi", "type": "phi", "confidence": 0.95}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98}]}"""
+                },
+                {
+                    "role": "user",
+                    "content": f"{content}"                    
+                }
+              ]
+        }
+
+
+class CommentNoDataPrompt(Prompt):
+    def convert_to_comment_input(self) -> Dict[str, Any]:
+        return {
+            "table_name": self.full_table_name,
+            "column_contents": self.df.toPandas().to_dict(orient='split'),
+        }
+
+    def add_metadata_to_comment_input(self) -> None:
+        spark = SparkSession.builder.getOrCreate()
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
+            )            
+            filtered_metadata_df = extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL") &
+                (extended_metadata_df["info_name"] != "description") &
+                (extended_metadata_df["info_name"] != "comment")
+            )
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            column_metadata_dict[column_name] = combined_metadata
+            
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+    def create_prompt_template(self) -> Dict[str, Any]:
+        content = self.prompt_content
+        acro_content = self.config.acro_content
+        return {
+            "comment_no_data":
+              [
+                {
+                    "role": "system",
+                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions.
+                    
+                    
+                    ###
+                    Input will come in in this format:
+                    
+                    ###
+                    Input format:
+                    {"index": [0, 1], "columns": ["name", "address", "email", "MRR", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$1545.50", "2024-03-05", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$124555.32", "2023-01-03", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'MRR': {'col_name': 'MRR', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'eap_created': {'col_name': 'eap_created', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}. 
+                    
+                    ###
+                    Please provide a response in this format:
+                    ###
+                    {"table": "Predictable recurring revenue earned from subscriptions in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer name. Based on the data available in the sample, this field appears to contain both first and last name.", "Customer mailing address including both the number and street name, but at least in the sampled data not including the city, state, country, or zipcode. Stored as a string and populated in all cases. The sample has two distinct values for two rows, but the metadata makes it clear that there are 5 distinct values in the table.", "Customer email address with domain name. This is a common format for email addresses. Based on the domains they are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "MRR (Monthly recurring revenue) from the customer in United States dollars with two decimals for cents. This field is never null and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the EAP (Enterprise Architecture Platform) or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column, stored as a string rather than as a boolean value."]} 
+
+                    ###
+                    Specific instructions to remember:
+                    1. Do not use the exact content from the examples given in the prompt unless it really makes sense to. 
+                    2. The top level index key that comes back is because this is a result from a Pandas to_dict call with a split type - this is not a column name unless it also shows up in "columns" list. 
+                    3. Generate descriptions based on the data and column names provided, as well as the metadata.
+                    4. Ensure the descriptions are detailed but concise, using between 50 to 200 words for comments.
+                    5. Use all information provided for context, including catalog name, schema name, table name, column name, data, and metadata. Consider knowledge of outside sources, for example, if the table is clearly an SAP table, Salesforce table, or synthetic test table.
+                    6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
+                    7. Column contents will only represent a subset of data in the table so please provide aggregated information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample. Do not provide any actual data in the comment.
+                    8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
+                    9. Do not provide any actual data in the comment.
+                    
+                    ###
+                    Please generate a description for the table and columns in the following string. 
+                    
+                    ###
+                    Please provide the contents of a comment string in four sentences: 
+                    1) a brief factual description of the table or column and its purpose
+                    2) any inference or deduction about the column based on the table name and column names
+                    3) a description of the data in the column contents and any deductions that can be made about the column from that
+                    4) a description of the metadata and further inference from the metadata itself. Do not rely too heavily on the data in the column contents, but be cautious inferring too strongly about the entire column based on the sample. Do not add a note after the dictionary, and do not provide any offensive or dangerous content. 
+                    
+                    Please ONLY provide the dictionary response. The response will be considered invalid if it contains any other content other than the dictionary.
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}"""
+                },
+                {   "role": "assistant",
+                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to the same value, but as a string rather than as a boolean value."]}""" 
+                },
+                {
+                    "role": "user",
+                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}"""
+                },
+                {   
+                    "role": "assistant",
+                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, representing single digit integers. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}"""
+                },
+                {
+                    "role": "user",
+                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}"""                    
+                }
+
+              ]
+            }
+
+
+
+class PromptFactory:
+    @staticmethod
+    def create_prompt(config, df, full_table_name) -> Prompt:
+        if config.mode == "comment" and config.allow_data:
+            return CommentPrompt(config, df, full_table_name)
+        elif config.mode == "comment":
+            return CommentNoDataPrompt(config, df, full_table_name)
+        elif config.mode == "pi":
+            return PIPrompt(config, df, full_table_name)
+        else:
+            raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
+

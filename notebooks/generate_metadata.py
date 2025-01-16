@@ -33,7 +33,11 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -U pydantic==2.9.2
+# MAGIC %pip install -r ../requirements.txt
+
+# COMMAND ----------
+
+#%pip install -U pydantic==2.9.2
 
 # COMMAND ----------
 
@@ -51,9 +55,53 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
-from src.dbxmetagen.prompts import create_prompt_template
+import os
+from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.metadata_generator import *
+from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
+from src.dbxmetagen.processing import (
+    tag_table,
+    write_to_log_table,
+    count_df_columns,
+    chunk_df,
+    get_extended_metadata_for_column,
+    sample_df,
+    append_table_row,
+    append_column_rows,
+    rows_to_df,
+    add_ddl_to_column_comment_df,
+    add_ddl_to_table_comment_df,
+    add_column_ddl_to_pi_df,
+    get_current_user,
+    df_to_sql_file,
+    populate_log_table,
+    mark_as_deleted,
+    log_metadata_generation,
+    filter_and_write_ddl,
+    create_folder_if_not_exists,
+    write_ddl_to_volume,
+    create_and_persist_ddl,
+    get_generated_metadata,
+    review_and_generate_metadata,
+    replace_catalog_name,
+    apply_comment_ddl,
+    process_and_add_ddl,
+    add_ddl_to_dfs,
+    summarize_table_content,
+    setup_ddl,
+    create_tables,
+    instantiate_metadata_objects,
+    generate_and_persist_metadata,
+    setup_queue,
+    ensure_fully_scoped_table_names,
+    upsert_table_names_to_control_table,
+    load_table_names_from_csv,
+    split_table_names,
+    generate_table_comment_ddl,
+    generate_column_comment_ddl,
+    generate_pi_information_ddl,
+    main
+)
 from src.dbxmetagen.error_handling import exponential_backoff
 
 # COMMAND ----------
@@ -76,16 +124,7 @@ dest_schema = dbutils.widgets.get("dest_schema")
 table_names = split_table_names(dbutils.widgets.get("table_names"))
 mode = dbutils.widgets.get("mode")
 base_url = dbutils.widgets.get("base_url")
-
-# COMMAND ----------
-
-### Set instance variables as needed.
-### Variables set in the config will be overridden by the values passed in the notebook through widgets.
 METADATA_PARAMS = instantiate_metadata_objects(catalog_name, dest_schema, table_names, mode, base_url)
-
-# COMMAND ----------
-
-### Set key for authenticating to AI Gateway
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
 
@@ -93,13 +132,6 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 
 # MAGIC %md
 # MAGIC ### Now run the code - this may take some time depending on how many tables/columns you are running and what your tokens/sec throughput on the LLM is. 
-
-# COMMAND ----------
-
-test = False
-print(test)
-if test:
-    print("Yes")
 
 # COMMAND ----------
 
