@@ -1,10 +1,11 @@
 [tool.poetry]
 name = "dbxmetagen"
-version = "0.2.6"
+version = "0.2.7"
 description = "Generates comments and other metadata for Delta tables in Databricks."
 readme = "README.md"
 authors = ["Eli Swanson <eli.swanson@databricks.com>", "James McCall <james.mccall@databricks.com>"]
 license = "DB License"
+requires-poetry = "==2.0.*"
 packages = [
     { include = "dbxmetagen", from = "src" }
 ]
@@ -29,6 +30,12 @@ typing-extensions = "^4.12.2"
 
 [tool.poetry.scripts]
 main = "dbxmetagen.main:main"
+
+[tool.poetry.requires-plugins]
+poetry-plugin-export = ">=1.9.0"
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^4.0.1"
 
 [build-system]
 requires = ["poetry-core"]
