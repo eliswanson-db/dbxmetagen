@@ -22,4 +22,4 @@ repos:
       - id: poetry-export
         entry: poetry export
         args: ["-f", "requirements.txt", "-o", "requirements.txt", "--without-hashes"]
-        files: pyproject.toml
+        files: ^pyproject\.toml$
