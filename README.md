@@ -43,6 +43,7 @@ There are a few key sections in this notebook:
 1. Default settings currently create ALTER scripts and puts in a volume. Tested in a databricks workspace.
 1. Some print-based logging to make understanding what's happening and debugging easy in the UI
 
+
 ### Discussion points:
 1. Throttling - the PPT endpoints will throttle eventually. Likely this will occur wehn running backfills.
 1. Sampling - setting a reasonable sample size for data will serve to provide input from column contents without leading to swamping of column names.
