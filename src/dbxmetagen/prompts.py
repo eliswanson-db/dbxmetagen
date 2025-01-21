@@ -21,8 +21,57 @@ class Prompt(ABC):
     @abstractmethod
     def add_metadata_to_comment_input(self) -> None:
         pass
+    
+    def get_column_tags(self) -> Dict[str, str]:
+        spark = SparkSession.builder.getOrCreate()
+        fully_scoped_table_name = self.full_table_name
+        catalog_name, schema_name, table_name = fully_scoped_table_name.split('.')
+        query = f"""
+        SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value 
+        FROM system.information_schema.column_tags 
+        WHERE catalog_name = '{catalog_name}' 
+        AND schema_name = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        result_df = spark.sql(query)
 
-
+        column_tags = result_df.groupBy("column_name").agg(
+                F.collect_list(F.struct("tag_name", "tag_value")).alias("tags")
+            ).collect()
+        
+        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        return column_tags
+    
+    def get_table_tags(self) -> Dict[str, str]:
+        spark = SparkSession.builder.getOrCreate()
+        fully_scoped_table_name = self.full_table_name
+        catalog_name, schema_name, table_name = fully_scoped_table_name.split('.')
+        query = f"""
+        SELECT catalog_name, schema_name, table_name, tag_name, tag_value 
+        FROM system.information_schema.table_tags
+        WHERE catalog_name = '{catalog_name}' 
+        AND schema_name = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        result_df = spark.sql(query)
+        table_tags = result_df.toPandas().set_index('tag_name')['tag_value'].to_dict()
+        return column_tags
+    
+    def get_table_constraints(self, constraint_catalog: str) -> Dict[str, str]:
+        spark = SparkSession.builder.getOrCreate()
+        fully_scoped_table_name = self.full_table_name
+        catalog_name, schema_name, table_name = fully_scoped_table_name.split('.')
+        query = f"SELECT table_name, constraint_type FROM system.information_schema.table_constraints WHERE table_catalog = '{catalog_name}' AND table_schema = '{schema_name}' AND table_name = '{table_name}';"
+        result_df = spark.sql(query)
+        table_constraints = result_df.toPandas().set_index('table_name')['constraint_type'].to_dict()
+        return table_constraints
+    
+    def get_table_comment(self, constraint_catalog: str) -> Dict[str, str]:
+        spark = SparkSession.builder.getOrCreate()
+        query = f"SELECT table_name, constraint_type FROM system.information_schema.table_constraints WHERE constraint_catalog = '{constraint_catalog}';"
+        result_df = spark.sql(query)
+        table_constraints = result_df.toPandas().set_index('table_name')['constraint_type'].to_dict()
+        return table_constraints
 
 
 class CommentPrompt(Prompt):
@@ -38,7 +87,8 @@ class CommentPrompt(Prompt):
         for column_name in self.prompt_content['column_contents']['columns']:
             extended_metadata_df = spark.sql(
                 f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
-            )            
+            )
+            
             filtered_metadata_df = extended_metadata_df.filter(
                 (extended_metadata_df["info_value"] != "NULL") &
                 (extended_metadata_df["info_name"] != "description") &
@@ -49,6 +99,8 @@ class CommentPrompt(Prompt):
             column_metadata_dict[column_name] = combined_metadata
         
         self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+    
 
     def create_prompt_template(self) -> Dict[str, Any]:
         content = self.prompt_content

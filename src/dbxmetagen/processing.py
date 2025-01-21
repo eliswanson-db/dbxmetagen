@@ -114,7 +114,7 @@ def chunk_df(df: DataFrame, columns_per_call: int = 5) -> List[DataFrame]:
 
 def get_extended_metadata_for_column(config, table_name, column_name):
     spark = SparkSession.builder.getOrCreate()
-    query = f"""DESCRIBE EXTENDED {config.catalog}.{config.dest_schema}.{table_name} `{column_name}`;"""
+    query = f"""DESCRIBE EXTENDED {config.catalog_name}.{config.dest_schema}.{table_name} `{column_name}`;"""
     return spark.sql(query)
     
 
@@ -343,7 +343,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
+    control_table = f"{config.catalog_name}.{config.dest_schema}.{config.control_table}"
     update_query = f"""
     UPDATE {control_table}
     SET _deleted_at = current_timestamp(), 
@@ -357,7 +357,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:   
     df.write.mode('append') \
         .option("mergeSchema", "true") \
-        .saveAsTable(f"{config.catalog}.{config.dest_schema}.{config.mode}_metadata_generation_log")
+        .saveAsTable(f"{config.catalog_name}.{config.dest_schema}.{config.mode}_metadata_generation_log")
     mark_as_deleted(table_name, config)
 
 
@@ -437,7 +437,7 @@ def create_and_persist_ddl(df: DataFrame,
     current_user = get_current_user()
     current_date = datetime.now().strftime('%Y%m%d')
     if config.volume_name:
-        base_path = f"/Volumes/{config.catalog}/{config.dest_schema}/{config.volume_name}/{current_user}/{current_date}"
+        base_path = f"/Volumes/{config.catalog_name}/{config.dest_schema}/{config.volume_name}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']        
         table_df = populate_log_table(table_df, config, current_user, base_path)
@@ -686,10 +686,10 @@ def setup_ddl(config: MetadataConfig) -> None:
     spark = SparkSession.builder.getOrCreate()
     ### Add error handling here
     if config.dest_schema:
-        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog}.{config.dest_schema}")
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog_name}.{config.dest_schema}")
 
     if config.volume_name:
-        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.volume_name}")
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.dest_schema}.{config.volume_name}")
 
 
 def create_tables(config: MetadataConfig) -> None:
@@ -704,24 +704,26 @@ def create_tables(config: MetadataConfig) -> None:
     """
     spark = SparkSession.builder.getOrCreate()
     if config.control_table:
-        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog}.{config.dest_schema}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.dest_schema}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
 
-def instantiate_metadata_objects(catalog_name, schema_name, table_names, mode, base_url):
+def instantiate_metadata_objects(env, mode, catalog_name=None, schema_name=None, table_names=None, base_url=None):
+    """By default, variables from variables.yml will be used. If widget values are provided, they will override.
+    """
+    #config = MetadataConfig()
     METADATA_PARAMS = {
         "table_names": table_names
         }
-    if catalog_name != "":
+    if catalog_name and catalog_name != "":
         METADATA_PARAMS["catalog_name"] = catalog_name
-    if schema_name != "":
+    if schema_name and schema_name != "":
         METADATA_PARAMS["dest_schema"] = schema_name
-    if mode != "":
+    if mode and mode != "":
         METADATA_PARAMS["mode"] = mode
-    if base_url != "":
+    if mode and mode != "":
+        METADATA_PARAMS["env"] = env        
+    if base_url and base_url != "":
         METADATA_PARAMS["base_url"] = base_url
-        os.environ["DATABRICKS_HOST"] = base_url
-    else:
-        os.environ["DATABRICKS_HOST"] = MetadataConfig.SETUP_PARAMS['base_url']
     return METADATA_PARAMS
 
 
@@ -751,7 +753,7 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
+    control_table = f"{config.catalog_name}.{config.dest_schema}.{config.control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
@@ -759,7 +761,7 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     config_table_names = config.table_names
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
-    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog)
+    combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog_name)
     print("Combined table names", combined_table_names)
     return combined_table_names
 
@@ -797,8 +799,8 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print(f"Upserting table names to control table {table_names}...")
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog}.{config.dest_schema}.{config.control_table}"
-    table_names = ensure_fully_scoped_table_names(table_names, config.catalog)
+    control_table = f"{config.catalog_name}.{config.dest_schema}.{config.control_table}"
+    table_names = ensure_fully_scoped_table_names(table_names, config.catalog_name)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
     existing_df = spark.read.table(control_table)
     new_table_names_df = table_names_df.join(existing_df, on="table_name", how="left_anti") \
@@ -890,8 +892,10 @@ def generate_pi_information_ddl(table_name: str, column_name: str, pi_type: str)
     return ddl_statement
 
 
-def main(metadata_params):
-    config = MetadataConfig(**metadata_params)
+def main(kwargs):
+    #metadata_params = instantiate_metadata_objects(*args)
+    config = MetadataConfig(**kwargs)
+    os.environ["DATABRICKS_HOST"]=config.base_url
     print("Number of columns per chunk...", config.columns_per_call)
     setup_ddl(config)
     create_tables(config)

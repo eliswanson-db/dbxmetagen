@@ -6,7 +6,7 @@
 
 # MAGIC %md
 # MAGIC #`dbxmetagen` Overview
-# MAGIC ### This is a utlity to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
+# MAGIC ### This is a utility to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data.
 # MAGIC
 # MAGIC While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. 
 # MAGIC
@@ -33,11 +33,11 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install -r ../requirements.txt
+#%pip install -r ../requirements.txt
 
 # COMMAND ----------
 
-#%pip install -U pydantic==2.9.2
+# MAGIC %pip install -U pydantic==2.9.2
 
 # COMMAND ----------
 
@@ -111,11 +111,12 @@ from src.dbxmetagen.error_handling import exponential_backoff
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog_name", "dbxmetagen")
-dbutils.widgets.text("dest_schema", "metadata_results")
+dbutils.widgets.text("catalog_name", "")
+dbutils.widgets.text("dest_schema", "")
+dbutils.widgets.text("base_url", "")
 dbutils.widgets.text("table_names", "")
 dbutils.widgets.text("mode", "comment")
-dbutils.widgets.text("base_url", "https://adb-830292400663869.9.azuredatabricks.net")
+dbutils.widgets.text("env", "dev")
 
 # COMMAND ----------
 
@@ -123,8 +124,16 @@ catalog_name = dbutils.widgets.get("catalog_name")
 dest_schema = dbutils.widgets.get("dest_schema")
 table_names = split_table_names(dbutils.widgets.get("table_names"))
 mode = dbutils.widgets.get("mode")
+env = dbutils.widgets.get("env")
 base_url = dbutils.widgets.get("base_url")
-METADATA_PARAMS = instantiate_metadata_objects(catalog_name, dest_schema, table_names, mode, base_url)
+notebook_variables = {
+    "catalog_name": catalog_name,
+    "dest_schema": dest_schema,
+    "table_names": table_names,
+    "mode": mode,
+    "env": env,
+    "base_url": base_url,
+}
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
 
@@ -135,4 +144,19 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 
 # COMMAND ----------
 
-main(METADATA_PARAMS)
+main(notebook_variables)
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+fully_scoped_table_name = "eswanson_genai.restricted.test_view_metadata"
+catalog_name, schema_name, table_name = fully_scoped_table_name.split('.')
+query = f"SELECT table_name, comment FROM system.information_schema.tables WHERE table_catalog = '{catalog_name}' AND table_schema = '{schema_name}' AND table_name = '{table_name}'";
+result_df = spark.sql(query)
+table_comment = result_df.toPandas().set_index('table_name')['comment'].to_dict()
+print(table_comment)
+
+
+# COMMAND ----------
+
+
