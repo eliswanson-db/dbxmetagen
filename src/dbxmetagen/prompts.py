@@ -1,27 +1,238 @@
+import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 import pandas as pd
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import collect_list, struct
 
+logging.basicConfig(
+    level=logging.WARNING,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 class Prompt(ABC):
-    def __init__(self, config, df, full_table_name):
+    def __init__(self, config: Any, df: DataFrame, full_table_name: str):
+        """
+        Initialize the Prompt class.
+
+        Args:
+            config (Any): Configuration object.
+            df (DataFrame): Spark DataFrame.
+            full_table_name (str): Full table name in the format 'catalog.schema.table'.
+        """
+        self.spark = SparkSession.builder.getOrCreate()
         self.config = config
         self.df = df
         self.full_table_name = full_table_name
         self.prompt_content = self.convert_to_comment_input()
         if self.config.add_metadata:
             self.add_metadata_to_comment_input()
-        print("Instantiating chat completion response...")
+        logger.debug("Instantiating chat completion response...")
 
     @abstractmethod
     def convert_to_comment_input(self) -> Dict[str, Any]:
+        """
+        Convert DataFrame to a dictionary format suitable for comment input.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing table and column contents.
+        """
         pass
 
     @abstractmethod
     def add_metadata_to_comment_input(self) -> None:
+        """
+        Add metadata to the comment input.
+        """
         pass
 
+    def filter_extended_metadata_fields(self, extended_metadata_df: DataFrame) -> DataFrame:
+        """
+        Filter extended metadata fields based on the mode.
+
+        Args:
+            extended_metadata_df (DataFrame): DataFrame containing extended metadata.
+
+        Returns:
+            DataFrame: Filtered DataFrame.
+        """
+        if self.config.mode == "pi":
+            return extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")
+        elif self.config.mode == "comment":
+            return extended_metadata_df.filter(
+                (extended_metadata_df["info_value"] != "NULL") &
+                (extended_metadata_df["info_name"] != "description") &
+                (extended_metadata_df["info_name"] != "comment")
+            )
+        else:
+            raise ValueError("Invalid mode provided. Please provide either 'pi' or 'comment'.")
+
+    def add_metadata_to_comment_input(self) -> None:
+        """
+        Add metadata to the comment input.
+        """
+        column_metadata_dict = self.extract_column_metadata()
+        table_metadata = self.get_table_metadata()
+        self.add_table_metadata_to_column_contents(table_metadata)
+        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
+    def extract_column_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Extract metadata for each column.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: Dictionary containing metadata for each column.
+        """
+        column_metadata_dict = {}
+        for column_name in self.prompt_content['column_contents']['columns']:
+            extended_metadata_df = self.spark.sql(
+                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
+            )
+            filtered_metadata_df = self.filter_extended_metadata_fields(extended_metadata_df)
+            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
+            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            combined_metadata = self.add_column_metadata_to_column_contents(column_name, combined_metadata)
+            column_metadata_dict[column_name] = combined_metadata
+        return column_metadata_dict
+    
+    def add_column_metadata_to_column_contents(self, column_name: str, combined_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add column metadata to the column contents.
+
+        Args:
+            column_name (str): Name of the column.
+            combined_metadata (Dict[str, Any]): Combined metadata for the column.
+
+        Returns:
+            Dict[str, Any]: Updated combined metadata with column tags.
+        """
+        column_tags = self.get_column_tags()
+        if column_name in column_tags:
+            combined_metadata['tags'] = column_tags[column_name]
+        return combined_metadata
+
+    def add_table_metadata_to_column_contents(self, table_metadata: Tuple[Dict[str, str], str, str, str]) -> None:
+        """
+        Add table metadata to the column contents.
+
+        Args:
+            table_metadata (Tuple[Dict[str, str], str, str, str]): Tuple containing column tags, table tags, table constraints, and table comments.
+        """
+        column_tags, table_tags, table_constraints, table_comments = table_metadata
+        self.prompt_content['column_contents']['table_tags'] = table_tags
+        self.prompt_content['column_contents']['table_constraints'] = table_constraints
+        self.prompt_content['column_contents']['table_comments'] = table_comments
+        logger.debug(self.prompt_content)
+    
+    def get_column_tags(self) -> Dict[str, Dict[str, str]]:
+        """
+        Get column tags from the information schema.
+
+        Returns:
+            Dict[str, Dict[str, str]]: Dictionary containing column tags.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value 
+        FROM system.information_schema.column_tags 
+        WHERE catalog_name = '{catalog_name}' 
+        AND schema_name = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        result_df = self.spark.sql(query)
+        column_tags = result_df.groupBy("column_name").agg(
+            collect_list(struct("tag_name", "tag_value")).alias("tags")
+        ).collect()
+        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        logger.debug("column tags dict: %s", column_tags_dict)
+        return column_tags_dict
+
+    def get_table_tags(self) -> str:
+        """
+        Get table tags from the information schema.
+
+        Returns:
+            str: JSON string containing table tags.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT tag_name, tag_value 
+        FROM system.information_schema.table_tags
+        WHERE catalog_name = '{catalog_name}' 
+        AND schema_name = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        result_df = self.spark.sql(query)
+        #logger.debug("table tags result: %s", result_df)
+        return self.df_to_json(result_df)
+    
+    def get_table_constraints(self) -> str:
+        """
+        Get table constraints from the information schema.
+
+        Returns:
+            str: JSON string containing table constraints.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT table_name, constraint_type 
+        FROM system.information_schema.table_constraints 
+        WHERE table_catalog = '{catalog_name}' 
+        AND table_schema = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        return self.df_to_json(self.spark.sql(query))
+    
+    def get_table_comment(self) -> str:
+        """
+        Get table comment from the information schema.
+
+        Returns:
+            str: JSON string containing table comment.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT table_name, comment 
+        FROM system.information_schema.tables 
+        WHERE table_catalog = '{catalog_name}' 
+        AND table_schema = '{schema_name}' 
+        AND table_name = '{table_name}';
+        """
+        return self.df_to_json(self.spark.sql(query))
+    
+    def get_table_metadata(self) -> Tuple[Dict[str, Dict[str, str]], str, str, str]:
+        """
+        Get table metadata including column tags, table tags, table constraints, and table comments.
+
+        Returns:
+            Tuple[Dict[str, Dict[str, str]], str, str, str]: Tuple containing column tags, table tags, table constraints, and table comments.
+        """
+        column_tags = self.get_column_tags()
+        table_tags = self.get_table_tags()
+        table_constraints = self.get_table_constraints()
+        table_comments = self.get_table_comment()
+        return column_tags, table_tags, table_constraints, table_comments
+
+    @staticmethod
+    def df_to_json(df: DataFrame) -> str:
+        """
+        Convert DataFrame to JSON string.
+
+        Args:
+            df (DataFrame): Spark DataFrame.
+
+        Returns:
+            str: JSON string representation of the DataFrame.
+        """
+        if df.isEmpty():
+            return {}
+        else:
+            json_response = df.toJSON().reduce(lambda x, y: x + ',' + y)
+            json_response = '[' + json_response + ']'
+            logger.debug("json response in prompt: %s", json_response)
+        return json_response
 
 
 
@@ -31,24 +242,6 @@ class CommentPrompt(Prompt):
             "table_name": self.full_table_name,
             "column_contents": self.df.toPandas().to_dict(orient='split'),
         }
-
-    def add_metadata_to_comment_input(self) -> None:
-        spark = SparkSession.builder.getOrCreate()
-        column_metadata_dict = {}
-        for column_name in self.prompt_content['column_contents']['columns']:
-            extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
-            )            
-            filtered_metadata_df = extended_metadata_df.filter(
-                (extended_metadata_df["info_value"] != "NULL") &
-                (extended_metadata_df["info_name"] != "description") &
-                (extended_metadata_df["info_name"] != "comment")
-            )
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            column_metadata_dict[column_name] = combined_metadata
-        
-        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
 
     def create_prompt_template(self) -> Dict[str, Any]:
         content = self.prompt_content
@@ -129,22 +322,6 @@ class PIPrompt(Prompt):
             "column_contents": self.df.toPandas().to_dict(orient='split'),
         }
 
-    def add_metadata_to_comment_input(self) -> None:
-        spark = SparkSession.builder.getOrCreate()
-        column_metadata_dict = {}
-        for column_name in self.prompt_content['column_contents']['columns']:
-            extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
-            )            
-            filtered_metadata_df = extended_metadata_df.filter(
-                (extended_metadata_df["info_value"] != "NULL")
-            )
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            column_metadata_dict[column_name] = combined_metadata
-            
-        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
-
     def create_prompt_template(self) -> Dict[str, Any]:
         content = self.prompt_content
         acro_content = self.config.acro_content
@@ -214,24 +391,6 @@ class CommentNoDataPrompt(Prompt):
             "table_name": self.full_table_name,
             "column_contents": self.df.toPandas().to_dict(orient='split'),
         }
-
-    def add_metadata_to_comment_input(self) -> None:
-        spark = SparkSession.builder.getOrCreate()
-        column_metadata_dict = {}
-        for column_name in self.prompt_content['column_contents']['columns']:
-            extended_metadata_df = spark.sql(
-                f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
-            )            
-            filtered_metadata_df = extended_metadata_df.filter(
-                (extended_metadata_df["info_value"] != "NULL") &
-                (extended_metadata_df["info_name"] != "description") &
-                (extended_metadata_df["info_name"] != "comment")
-            )
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            column_metadata_dict[column_name] = combined_metadata
-            
-        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
 
     def create_prompt_template(self) -> Dict[str, Any]:
         content = self.prompt_content

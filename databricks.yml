@@ -19,7 +19,7 @@ targets:
     default: true
     workspace:
       root_path: ${var.current_working_directory}
-      host: https://adb-830292400663869.9.azuredatabricks.net
+      host: ${var.dev_host}
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
@@ -27,7 +27,7 @@ targets:
   prod:
     mode: production
     workspace:
-      host: https://adb-830292400663869.9.azuredatabricks.net
+      host: ${var.prod_host}
       root_path: ${var.current_working_directory}
     permissions:
       - user_name: ${var.current_user}

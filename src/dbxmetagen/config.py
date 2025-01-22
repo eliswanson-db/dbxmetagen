@@ -1,10 +1,13 @@
+import yaml
+
 class MetadataConfig:
     ACRO_CONTENT = {
-        "DBX": "Databricks"
+        "DBX": "Databricks",
+        "WHO": "World Health Organization",       
         }
     SETUP_PARAMS = {
-        "base_url": "https://adb-830292400663869.9.azuredatabricks.net",
-        "catalog": "dbxmetagen",
+        "yaml_file_path": "../resources/variables/variables.yml",
+        "yaml_variable_names": ['dev_host', 'prod_host', 'catalog_name', 'schema_name'],
         "catalog_tokenizable": "__CATALOG_NAME__", #"__CATALOG_NAME___{{env}}", # __CATALOG_NAME__
         "model": "databricks-meta-llama-3-1-70b-instruct",
         "registered_model_name": None,
@@ -26,10 +29,11 @@ class MetadataConfig:
         "sample_size": 5,
         "max_tokens": 5000,
         "temperature": 0.1,
-        "add_metadata": True,
+        "add_metadata": False,
     }
     
     def __init__(self, **kwargs):
+        print(kwargs)
         self.setup_params = self.__class__.SETUP_PARAMS
         self.model_params = self.__class__.MODEL_PARAMS
 
@@ -42,5 +46,32 @@ class MetadataConfig:
         
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        yaml_variables = self.load_yaml()
+        print("yaml_variables:", yaml_variables)
+        for key, value in yaml_variables.items():
+            setattr(self, key, value)
+        
+        self.instantiate_environments()
+
+    def load_yaml(self):
+        with open(self.yaml_file_path, 'r') as file:
+            variables = yaml.safe_load(file)
+        selected_variables = {key: variables['variables'][key]['default'] for key in self.yaml_variable_names if key in variables['variables']}
+        return selected_variables
+    
+    def instantiate_environments(self):
+        if self.env == "dev":
+            self.base_url = self.dev_host
+        elif self.env == "qa":
+            self.base_url = self.qa_host
+        elif self.env == "test":
+            self.base_url = self.test_host
+        elif self.env == "stg":
+            self.base_url = self.stg_host
+        elif self.env == "prod":
+            self.base_url = self.prod_host
+        else:
+            raise Exception(f"Environment {self.env} does not match any provided host in variables.yml.")
         
 
