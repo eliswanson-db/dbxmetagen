@@ -13,9 +13,9 @@ repos:
       - id: pretty-format-json
         args: [--autofix, --no-ensure-ascii, --no-sort-keys]
       - id: check-ast
-        files: notebooks/*
+        files: notebooks/generate_metadata.py
       - id: debug-statements
-        files: notebooks/*
+        files: notebooks/generate_metadata.py
       - id: check-docstring-first
 
   - repo: https://github.com/python-poetry/poetry-plugin-export
@@ -23,6 +23,6 @@ repos:
     hooks:
       - id: poetry-export
         args: ["-f", "requirements.txt", "-o", "requirements.txt", "--without-hashes"]
-        files: (./pyproject.toml|./poetry.lock)
+        files: (pyproject.toml|poetry.lock)
         language: python
         additional_dependencies: ["poetry==2.0.1", "poetry-plugin-export==1.9.0"]
