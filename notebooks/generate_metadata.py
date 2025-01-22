@@ -33,15 +33,9 @@
 
 # COMMAND ----------
 
-import sys
-print(sys.version)
-
-# COMMAND ----------
-
-# MAGIC %pip install -r ../requirements.txt
-
-# COMMAND ----------
-
+# If you're using DBR 14.3 or need the requirements to match the poetry reqs:
+%pip install -r ../requirements.txt
+# With DBR 15.4 LTS if you're ok with library versions being pinned to the DBR and not the poetry reqs:
 #%pip install -U pydantic==2.9.2
 
 # COMMAND ----------
@@ -64,48 +58,7 @@ import os
 from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
-from src.dbxmetagen.processing import (
-    tag_table,
-    write_to_log_table,
-    count_df_columns,
-    chunk_df,
-    get_extended_metadata_for_column,
-    sample_df,
-    append_table_row,
-    append_column_rows,
-    rows_to_df,
-    add_ddl_to_column_comment_df,
-    add_ddl_to_table_comment_df,
-    add_column_ddl_to_pi_df,
-    get_current_user,
-    df_to_sql_file,
-    populate_log_table,
-    mark_as_deleted,
-    log_metadata_generation,
-    filter_and_write_ddl,
-    create_folder_if_not_exists,
-    write_ddl_to_volume,
-    create_and_persist_ddl,
-    get_generated_metadata,
-    review_and_generate_metadata,
-    replace_catalog_name,
-    apply_comment_ddl,
-    process_and_add_ddl,
-    add_ddl_to_dfs,
-    summarize_table_content,
-    setup_ddl,
-    create_tables,
-    instantiate_metadata_objects,
-    generate_and_persist_metadata,
-    setup_queue,
-    ensure_fully_scoped_table_names,
-    upsert_table_names_to_control_table,
-    load_table_names_from_csv,
-    split_table_names,
-    generate_table_comment_ddl,
-    generate_column_comment_ddl,
-    generate_pi_information_ddl,
-)
+from src.dbxmetagen.processing import split_table_names
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.main import main
 
