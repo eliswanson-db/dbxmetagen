@@ -33,11 +33,16 @@
 
 # COMMAND ----------
 
-#%pip install -r ../requirements.txt
+import sys
+print(sys.version)
 
 # COMMAND ----------
 
-# MAGIC %pip install -U pydantic==2.9.2
+# MAGIC %pip install -r ../requirements.txt
+
+# COMMAND ----------
+
+#%pip install -U pydantic==2.9.2
 
 # COMMAND ----------
 
@@ -100,9 +105,9 @@ from src.dbxmetagen.processing import (
     generate_table_comment_ddl,
     generate_column_comment_ddl,
     generate_pi_information_ddl,
-    main
 )
 from src.dbxmetagen.error_handling import exponential_backoff
+from src.dbxmetagen.main import main
 
 # COMMAND ----------
 
@@ -145,18 +150,3 @@ os.environ["DATABRICKS_TOKEN"]=api_key
 # COMMAND ----------
 
 main(notebook_variables)
-
-# COMMAND ----------
-
-from pyspark.sql import functions as F
-fully_scoped_table_name = "eswanson_genai.restricted.test_view_metadata"
-catalog_name, schema_name, table_name = fully_scoped_table_name.split('.')
-query = f"SELECT table_name, comment FROM system.information_schema.tables WHERE table_catalog = '{catalog_name}' AND table_schema = '{schema_name}' AND table_name = '{table_name}'";
-result_df = spark.sql(query)
-table_comment = result_df.toPandas().set_index('table_name')['comment'].to_dict()
-print(table_comment)
-
-
-# COMMAND ----------
-
-
