@@ -13,9 +13,9 @@ repos:
       - id: pretty-format-json
         args: [--autofix, --no-ensure-ascii, --no-sort-keys]
       - id: check-ast
-        files: ./notebooks/*.py
+        files: notebooks/*
       - id: debug-statements
-        files: ./notebooks/*.py
+        files: notebooks/*
       - id: check-docstring-first
 
   - repo: https://github.com/python-poetry/poetry-plugin-export
