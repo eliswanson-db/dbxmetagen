@@ -1,0 +1,103 @@
+variables:
+  current_user:
+    description: User deploying the bundle. Can apply to service principals as well.
+    default: ${workspace.current_user.userName}
+  current_working_directory:
+    description: Working directory or bundle root.
+    default: /Users/${var.current_user}/.bundle/${bundle.name}/${bundle.target}
+  catalog_name:
+    description: primary catalog where data, models, and files are stored for this project.
+    default: dbxmetagen
+  schema_name:
+    description: primary schema where data, models, and files are stored for this project.
+    default: metadata_results
+  dev_host:
+    description: host for the dev target
+    default: https://adb-830292400663869.9.azuredatabricks.net/
+  prod_host:
+    description: host for the prod target
+    default: https://adb-830292400663869.9.azuredatabricks.net/
+  catalog_tokenizable:
+    description: tokenizable catalog name
+    default: __CATALOG_NAME__
+  model:
+    description: model name
+    default: databricks-meta-llama-3-1-70b-instruct
+  registered_model_name:
+    description: registered model name
+    default: null
+  model_type:
+    description: model type
+    default: null
+  volume_name:
+    description: volume name
+    default: generated_metadata
+  table_names_source:
+    description: source of table names
+    default: csv_file_path
+  source_file_path:
+    description: path to the source file
+    default: table_names.csv
+  control_table:
+    description: control table name
+    default: metadata_control
+  apply_ddl:
+    description: whether to apply DDL
+    default: false
+  allow_data:
+    description: whether to allow data in comments
+    default: true
+  dry_run:
+    description: whether to perform a dry run
+    default: false
+  pi_classification_rules:
+    description: rules for PI classification
+    default: |
+      PII (Personally Identifiable Information): Any data that can identify an individual, such as name, address, or social security number. PHI (Protected Health Information): Health-related data that includes any of the 18 HIPAA-identified elements, like medical records or treatment histories. PCI (Payment Card Information): Data related to payment card transactions, including card numbers, expiration dates, and security codes. Non-PII/PHI/PCI: Data that cannot be used to identify an individual or is not related to health or payment cards, such as general demographics or anonymized statistics.
+      ###
+      To identify these types:
+      ###
+      PII: Look for column names or data containing personal details like 'full_name', 'address', 'ssn', 'email', or 'phone_number'14.
+      PHI: Search for health-related terms in column names or data, such as 'medical_record_number', 'diagnosis', 'treatment_date', or any of the 18 HIPAA identifiers4.
+      PCI: Identify columns or data with payment card-related terms like 'card_number', 'expiration_date', 'cvv', or 'cardholder_name'13.
+      Non-PII/PHI/PCI: Look for general, non-identifying information like 'zip_code' (without other identifiers), 'age_group', or 'product_category'.
+      ###
+      Tables with PII vs columns with PII:
+      ###
+      If a column has only PII, then it should be considered only PII, even if other columns in the table have medical information in them. A specific example of this is that if a column only contains name, or address, then it should be marked as pii, not as phi. However, the column containing medical information would be considered PHI because it pertains to the health status, provision of health care, or payment for health care that can be linked to an individual.
+
+      If a table has columns with both PII and PHI, or with PII and medical information, then the table itself has PHI.
+  allow_manual_override:
+    description: whether to allow manual override
+    default: true
+  tag_none_fields:
+    description: whether to tag fields with no PI
+    default: true
+  pi_column_field_names:
+    description: field names for PI columns
+    default: ["default"]
+  max_prompt_length:
+    description: maximum prompt length
+    default: 5000
+  columns_per_call:
+    description: columns per call
+    default: 5
+  sample_size:
+    description: sample size
+    default: 5
+  max_tokens:
+    description: maximum tokens
+    default: 5000
+  temperature:
+    description: temperature
+    default: 0.1
+  add_metadata:
+    description: whether to add metadata
+    default: true
+  acro_content:
+    description: acronyms that are commonly used in the data
+    default: |
+        {
+        "DBX": "Databricks",
+        "WHO": "World Health Organization",       
+        }

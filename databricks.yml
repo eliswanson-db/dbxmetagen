@@ -5,7 +5,8 @@ bundle:
 include:
   - resources/jobs/*.yml
   - resources/schemas/*.yml
-  - resources/variables/*.yml
+  #- resources/variables/*.yml
+  - databricks_variables.yml
 
 artifacts:
   default:
@@ -33,4 +34,4 @@ targets:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
     run_as:
-      user_name: ${var.current_user} #sp name should be used instead later.
+      user_name: ${var.current_user} #sp name should be used instead for true production cases.
