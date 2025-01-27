@@ -12,7 +12,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10.12, <3.13"
+python = ">=3.10.12, <3.13.0"
 mlflow = "==2.18.0"
 openai = "==1.56.1"
 cloudpickle = "==3.1.0"
