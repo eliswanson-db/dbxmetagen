@@ -33,8 +33,13 @@
 
 # COMMAND ----------
 
-%pip install -r ../requirements.txt
-#%pip install -U pydantic==2.9.2
+import sys
+print(sys.version)
+
+# COMMAND ----------
+
+# MAGIC %pip install -r ../requirements.txt
+# MAGIC #%pip install -U pydantic==2.9.2
 
 # COMMAND ----------
 

@@ -76,11 +76,7 @@ import pandas as pd
 
 data = {
   "request": [
-
-      # Plain string. Plain strings are transformed to the `messages` format before being passed to your agent.
       "What is the difference between reduceByKey and groupByKey in Spark?",
-
-      # OpenAI chat completion schema. Use the `messages` field for a single- or multi-turn chat.
       {
           "messages": [
               {
@@ -89,8 +85,6 @@ data = {
               }
           ]
       },
-
-      # SplitChatMessagesRequest. Use the `query` and `history` fields for a single- or multi-turn chat.
       {
           "query": "Explain broadcast variables in Spark. How do they enhance performance?",
           "history": [
