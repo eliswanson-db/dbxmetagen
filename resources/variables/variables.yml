@@ -1,4 +1,4 @@
-variables: 
+variables:
   current_user:
     description: User deploying the bundle. Can apply to service principals as well.
     default: ${workspace.current_user.userName}
@@ -17,4 +17,3 @@ variables:
   prod_host:
     description: host for the prod target
     default: https://adb-830292400663869.9.azuredatabricks.net/
-

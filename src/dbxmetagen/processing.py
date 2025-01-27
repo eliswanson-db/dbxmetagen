@@ -20,7 +20,7 @@ from datetime import datetime
 import mlflow
 import time
 import random
-import pandas as pd 
+import pandas as pd
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf
 from src.dbxmetagen.config import MetadataConfig
@@ -48,7 +48,7 @@ class Input(BaseModel):
     table_name: str
 
     @classmethod
-    def from_df(cls, df: DataFrame) -> Dict[str, Any]:        
+    def from_df(cls, df: DataFrame) -> Dict[str, Any]:
         return {
             "table_name": f"{catalog_name}.{schema_name}.{table_name}",
             "column_contents": cls.df.toPandas().to_dict(orient='list')
@@ -125,7 +125,7 @@ def get_extended_metadata_for_column(config, table_name, column_name):
     spark = SparkSession.builder.getOrCreate()
     query = f"""DESCRIBE EXTENDED {config.catalog_name}.{config.schema_name}.{table_name} `{column_name}`;"""
     return spark.sql(query)
-    
+
 
 def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     """
@@ -135,14 +135,14 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
         df (DataFrame): The DataFrame to be analyzed.
         nrows (int): number of rows in dataframe
         sample_size (int): The number of rows to sample.
-    
+
     Returns:
         DataFrame: A DataFrame with columns to generate metadata for.
     """
     if nrows < sample_size:
         print(f"Not enough rows for a proper sample. Continuing with inference with {nrows} rows...")
         return df.limit(sample_size)
-    
+
     larger_sample = sample_size * 100
     sampling_ratio = determine_sampling_ratio(nrows, larger_sample)
     sampled_df = df.sample(withReplacement=False, fraction=sampling_ratio)
@@ -155,7 +155,7 @@ def sample_df(df: DataFrame, nrows: int, sample_size: int = 5) -> DataFrame:
     if result_rows < sample_size:
         print("Not enough non-NULL rows, returning available rows, despite large proportion of NULLs. Result rows:", result_rows, "vs sample size:", sample_size)
         return df.limit(sample_size)
-    
+
     print(f"Filtering {result_rows} result rows down to {sample_size} rows...")
     return filtered_df.limit(sample_size)
 
@@ -174,11 +174,11 @@ def append_table_row(config: MetadataConfig, rows: List[Row], full_table_name: s
     """
     row = Row(
         table=full_table_name,
-        tokenized_table=tokenized_full_table_name,        
+        tokenized_table=tokenized_full_table_name,
         ddl_type='table',
         column_name='None',
         column_content=response.table,
-        _created_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),     
+        _created_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     )
     rows.append(row)
     return rows
@@ -197,10 +197,10 @@ def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name:
         List[Row]: The updated list of rows with the new column rows appended.
     """
     for column_name, column_content in zip(response.columns, response.column_contents):
-        if isinstance(column_content, dict) and config.mode == "pi":   
+        if isinstance(column_content, dict) and config.mode == "pi":
             row = Row(
                 table=full_table_name,
-                tokenized_table=tokenized_full_table_name,        
+                tokenized_table=tokenized_full_table_name,
                 ddl_type='column',
                 column_name=column_name,
                 **column_content,
@@ -209,7 +209,7 @@ def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name:
         elif isinstance(column_content, str) and config.mode == "comment":
             row = Row(
                 table=full_table_name,
-                tokenized_table=tokenized_full_table_name,        
+                tokenized_table=tokenized_full_table_name,
                 ddl_type='column',
                 column_name=column_name,
                 column_content=column_content,
@@ -340,7 +340,7 @@ def populate_log_table(df, config, current_user, base_path):
                 .withColumn("columns_per_call", lit(config.columns_per_call))
                 .withColumn("status", lit("No Volume specified..."))
             )
-    
+
 
 
 def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
@@ -355,7 +355,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     control_table = f"{config.catalog_name}.{config.schema_name}.{config.control_table}"
     update_query = f"""
     UPDATE {control_table}
-    SET _deleted_at = current_timestamp(), 
+    SET _deleted_at = current_timestamp(),
         _updated_at = current_timestamp()
     WHERE table_name = '{table_name}'
     """
@@ -363,14 +363,14 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     print(f"Marked {table_name} as deleted in the control table...")
 
 
-def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:   
+def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:
     df.write.mode('append') \
         .option("mergeSchema", "true") \
         .saveAsTable(f"{config.catalog_name}.{config.schema_name}.{config.mode}_metadata_generation_log")
     mark_as_deleted(table_name, config)
 
 
-def filter_and_write_ddl(df: DataFrame,                          
+def filter_and_write_ddl(df: DataFrame,
                          config: MetadataConfig,
                          base_path: str,
                          full_table_name: str,
@@ -397,10 +397,10 @@ def filter_and_write_ddl(df: DataFrame,
         df = df.withColumn("status", lit("Success"))
         log_metadata_generation(df, config, full_table_name, base_path)
     except Exception as e:
-        print(f"Error writing DDL to volume: {e}. Check if Volume exists and if your permissions are correct.")        
+        print(f"Error writing DDL to volume: {e}. Check if Volume exists and if your permissions are correct.")
         df = df.withColumn("status", lit("Failed writing to volume..."))
         log_metadata_generation(df, config, full_table_name, base_path)
-    
+
 
 def create_folder_if_not_exists(folder_path):
     """Creates a folder if it doesn't exist.
@@ -448,7 +448,7 @@ def create_and_persist_ddl(df: DataFrame,
     if config.volume_name:
         base_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{current_user}/{current_date}"
         print(f"Writing DDL for {table_name}...")
-        table_df = df[f'{config.mode}_table_df']        
+        table_df = df[f'{config.mode}_table_df']
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         filter_and_write_ddl(table_df, config, modified_path, table_name, current_user, current_date)
@@ -491,9 +491,9 @@ def get_generated_metadata(
         sampled_chunk = sample_df(chunk, nrows, config.sample_size)
         prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
         prompt_messages = prompt.create_prompt_template()
-        if config.registered_model_name:                
+        if config.registered_model_name:
             call_registered_model(config, prompt)
-        else:            
+        else:
             chat_response = MetadataGeneratorFactory.create_generator(config)
         response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
         responses.append(response)
@@ -610,10 +610,10 @@ def override_metadata_from_csv(df: DataFrame, csv_path: str) -> DataFrame:
         DataFrame: The updated DataFrame with overridden type and classification.
     """
     csv_df = pd.read_csv(csv_path)
-    
+
     spark = SparkSession.builder.getOrCreate()
     csv_spark_df = spark.createDataFrame(csv_df)
-    
+
     # TODO: This needs to be optimized.
     for row in csv_spark_df.collect():
         catalog = row['catalog']
@@ -621,16 +621,16 @@ def override_metadata_from_csv(df: DataFrame, csv_path: str) -> DataFrame:
         table = row['table']
         column = row['column']
         type_override = row['pi_classification']
-        
+
         condition = (col('table_name') == table)
         if schema:
             condition = condition & (col('schema_name') == schema)
         if catalog:
             condition = condition & (col('catalog_name') == catalog)
-   
+
         df = df.withColumn('type', when(condition, lit(type_override)).otherwise(col('type')))
         df = df.withColumn('classification', when(condition, lit(type_override)).otherwise(col('classification')))
-    
+
     return df
 
 
@@ -677,7 +677,7 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
                                     .withColumn("column_name", lit("None")) \
                                     .withColumn("type", lit(table_classification)) \
                                     .withColumn("classification", lit(table_classification)) \
-                                    .withColumn("table_name", lit(table_name))         
+                                    .withColumn("table_name", lit(table_name))
     pi_table_row = add_table_ddl_to_pi_df(pi_table_row, 'ddl')
     return pi_table_row.select(column_df.columns)
 
@@ -773,7 +773,7 @@ def instantiate_metadata_objects(env, mode, catalog_name=None, schema_name=None,
     if mode and mode != "":
         METADATA_PARAMS["mode"] = mode
     if mode and mode != "":
-        METADATA_PARAMS["env"] = env        
+        METADATA_PARAMS["env"] = env
     if base_url and base_url != "":
         METADATA_PARAMS["base_url"] = base_url
     return METADATA_PARAMS
@@ -787,7 +787,7 @@ def generate_and_persist_metadata(config) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     for table in config.table_names:
-        print(f"Processing table {table}...")        
+        print(f"Processing table {table}...")
         df = process_and_add_ddl(config, table)
         print(f"Generating and persisting ddl for {table}...")
         create_and_persist_ddl(df, config, table)
@@ -867,10 +867,10 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
 
 def load_table_names_from_csv(csv_file_path):
     spark = SparkSession.builder.getOrCreate()
-    df_tables = spark.read.csv(f"file://{os.path.join(os.getcwd(), csv_file_path)}", header=True)    
+    df_tables = spark.read.csv(f"file://{os.path.join(os.getcwd(), csv_file_path)}", header=True)
     table_names = [row["table_name"] for row in df_tables.select("table_name").collect()]
     return table_names
-    
+
 
 def split_table_names(table_names: str) -> List[str]:
     if not table_names:
@@ -888,7 +888,7 @@ def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
         schema (StructType): The schema of the table.
 
     Returns:
-        str: The DDL statement for adding the 
+        str: The DDL statement for adding the
     """
     ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
     return ddl_statement
@@ -942,4 +942,3 @@ def generate_pi_information_ddl(table_name: str, column_name: str, pi_type: str)
     """
     ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN `{column_name}` SET TAGS ('has_pi' = '{pi_type}');"
     return ddl_statement
-

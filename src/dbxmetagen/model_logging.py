@@ -26,7 +26,7 @@ def convert_to_chat_response(chat_completion):
         )
         for choice in chat_completion.choices
     ]
-    
+
     return ChatResponse(
         id=chat_completion.id,
         object=chat_completion.object,

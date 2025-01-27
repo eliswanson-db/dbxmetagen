@@ -3,7 +3,7 @@ import yaml
 class MetadataConfig:
     ACRO_CONTENT = {
         "DBX": "Databricks",
-        "WHO": "World Health Organization",       
+        "WHO": "World Health Organization",
         }
     SETUP_PARAMS = {
         "yaml_file_path": "../resources/variables/variables.yml",
@@ -17,7 +17,7 @@ class MetadataConfig:
         "table_names_source": "csv_file_path", #could also use a list of table names in the config
         "source_file_path": "table_names.csv",
         "control_table": "metadata_control",
-        "apply_ddl": False, # If true, the DDL for the tables will be applied. 
+        "apply_ddl": False, # If true, the DDL for the tables will be applied.
         "allow_data": True, # Determines whether data can be allowed to be displayed in a comment. Turn off if data is not allowed to be displayed. Note that comments still need to be reviewed by a human for any guarantees, but the prompt will be constructed to make a best effort at not including data in the comments.
         "dry_run": False, #What should a dry run actually do? Provide test data?
         "pi_classification_rules": """If a column has only PII, then it should be considered only PII, even if other columns in the table have medical information in them. A specific example of this is that if a column only contains name, or address, then it should be marked as pii, not as phi. However, the column containing medical information would be considered PHI because it pertains to the health status, provision of health care, or payment for health care that can be linked to an individual.""", ###The table as a whole though would be considered PHI because it contains both identifiable information and health-related information. These rules are only used in PI identification and classification.
@@ -31,7 +31,7 @@ class MetadataConfig:
         "temperature": 0.1,
         "add_metadata": True,
     }
-    
+
     def __init__(self, **kwargs):
         print(kwargs)
         self.setup_params = self.__class__.SETUP_PARAMS
@@ -40,10 +40,10 @@ class MetadataConfig:
 
         for key, value in self.setup_params.items():
             setattr(self, key, value)
-        
+
         for key, value in self.model_params.items():
             setattr(self, key, value)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -51,7 +51,7 @@ class MetadataConfig:
         print("yaml_variables:", yaml_variables)
         for key, value in yaml_variables.items():
             setattr(self, key, value)
-        
+
         self.instantiate_environments()
 
     def load_yaml(self):
@@ -59,7 +59,7 @@ class MetadataConfig:
             variables = yaml.safe_load(file)
         selected_variables = {key: variables['variables'][key]['default'] for key in self.yaml_variable_names if key in variables['variables']}
         return selected_variables
-    
+
     def instantiate_environments(self):
         if self.env == "dev":
             self.base_url = self.dev_host
@@ -73,5 +73,3 @@ class MetadataConfig:
             self.base_url = self.prod_host
         else:
             raise Exception(f"Environment {self.env} does not match any provided host in variables.yml.")
-        
-
