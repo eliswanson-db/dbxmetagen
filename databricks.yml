@@ -5,7 +5,6 @@ bundle:
 include:
   - resources/jobs/*.yml
   - resources/schemas/*.yml
-  #- resources/variables/*.yml
   - databricks_variables.yml
 
 artifacts:
@@ -20,7 +19,7 @@ targets:
     default: true
     workspace:
       root_path: ${var.current_working_directory}
-      host: ${var.dev_host}
+      host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update dev host name here to use DAB deploy>
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
@@ -28,7 +27,7 @@ targets:
   prod:
     mode: production
     workspace:
-      host: ${var.prod_host}
+      host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update prod host name here to use DAB deploy>
       root_path: ${var.current_working_directory}
     permissions:
       - user_name: ${var.current_user}

@@ -329,14 +329,13 @@ class PIPrompt(Prompt):
             "pi": [
                 {
                     "role": "system",
-                    "content": """You are an AI assistant trying to help identify personally identifying information. Consider the data in the sample, but please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content.
-
-                    ###
+                    "content": """You are an AI assistant trying to help identify personally identifying information. Consider the data in the sample, the column names, and the column metadata, but please only respond with a dictionary in the format given in the user instructions. Do NOT use content from the examples given in the prompts. The examples are provided to help you understand the format of the prompt. Do not add a note after the dictionary, and do not provide any offensive or dangerous content.
+                    ### 
                     Input Format
                     {"index": [0, 1], "columns": ["name", "address", "email", "MRR", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$1545.50", "2024-03-05", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$124555.32", "2023-01-03", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {{'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'MRR': {'col_name': 'MRR', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'eap_created': {'col_name': 'eap_created', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}
 
                     ###
-                    Please provide a response in this format, putting under classification either "pi" or "none", and under type either "pii", "pci", or "phi". Do not add additional fields.
+                    Please provide a response in this format, putting under classification either "pi" or "None", and under type either "pii", "pci", "medical_information", or "phi". Do not add additional fields.
                     ###
 
                     {"table": "pi", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98]}
@@ -346,8 +345,8 @@ class PIPrompt(Prompt):
                     Specific Considerations
                     1. pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another.
                     2. Please don't respond with anything other than the dictionary.
-                    3. Attempt to classify into PI, PII, PCI, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
-                    4. When health information is not linked to any identifiers, it's not considered PHI under HIPAA. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a table that has both medical information and patient names is considered PHI.
+                    3. Attempt to classify into None, PII, PCI, medical information, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. Medical Information: This includes any infromation in a medical record that cannot be used to identify an individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
+                    4. When health or medical information is not linked to any identifiers, it's not considered PHI under HIPAA, it is considered medical infrormation. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a table that has both medical information and patient names is considered PHI.
 
                     ###
                     """
@@ -397,7 +396,7 @@ class CommentNoDataPrompt(Prompt):
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
-            "comment_no_data":
+            "comment":
               [
                 {
                     "role": "system",
