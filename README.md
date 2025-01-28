@@ -35,7 +35,7 @@ Finally, these personas can in theory all be the same person, though this would 
 
 <img src="images/personas.png" alt="User Personas" width="400" top-margin="50">\
 
-The simplest workflow available can just be done by one user. Clone the repo into a Databricks Git Folder, or unpack into a Workspace folder. Update variables.yml in the project root. Specifically, you will need to update the host and catalog name. Review variables.yml and update necessary variables. You can update the env and mode widgets in notebooks/generate_metadata.
+The simplest workflow available can just be done by one user. Clone the repo into a Databricks Git Folder, or unpack into a Workspace folder. Update variables.yml in the project root. Specifically, you will need to update the host and catalog name. Review variables.yml and update necessary variables. You can update the env and mode widgets in notebooks/generate_metadata. Update table_names.csv in notebooks/table_names.csv
 
 Optional workflow:
 1. Adjust PI definitions
