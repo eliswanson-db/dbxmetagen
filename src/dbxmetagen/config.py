@@ -5,7 +5,7 @@ class MetadataConfig:
         }
     SETUP_PARAMS = {
         "yaml_file_path": "../variables.yml",
-        "yaml_variable_names": ['dev_host', 'prod_host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'temperature', 'add_metadata', 'acro_content']
+        "yaml_variable_names": ['host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'format_catalog', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'temperature', 'add_metadata', 'acro_content']
     }
     MODEL_PARAMS = {
     }
@@ -40,15 +40,7 @@ class MetadataConfig:
         return selected_variables
 
     def instantiate_environments(self):
-        if self.env == "dev":
-            self.base_url = self.dev_host
-        elif self.env == "qa":
-            self.base_url = self.qa_host
-        elif self.env == "test":
-            self.base_url = self.test_host
-        elif self.env == "stg":
-            self.base_url = self.stg_host
-        elif self.env == "prod":
-            self.base_url = self.prod_host
-        else:
+        try:
+            self.base_url = self.host
+        except:
             raise Exception(f"Environment {self.env} does not match any provided host in variables.yml.")

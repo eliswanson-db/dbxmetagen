@@ -71,7 +71,7 @@ dbutils.widgets.text("dest_schema", "")
 dbutils.widgets.text("base_url", "")
 dbutils.widgets.text("table_names", "")
 dbutils.widgets.text("mode", "comment")
-dbutils.widgets.text("env", "dev")
+dbutils.widgets.text("env", "")
 
 # COMMAND ----------
 

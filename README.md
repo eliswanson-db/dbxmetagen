@@ -40,7 +40,7 @@ The simplest workflow available can just be done by one user. Clone the repo int
 Optional workflow:
 1. Adjust PI definitions
 1. Add to acronyms
-
+1. Adjust other secondary options.
 
 <img src="images/basic_workflow.png" alt="User Process Flow - simple" width="1000">
 
