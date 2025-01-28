@@ -1,11 +1,11 @@
 import time
-import random 
+import random
 import pandas as pd
 
 def exponential_backoff(retries, base_delay=1, max_delay=120, jitter=True):
     """
     Exponential backoff with optional jitter.
-    
+
     :param retries: Number of retries attempted.
     :param base_delay: Initial delay in seconds.
     :param max_delay: Maximum delay in seconds.
@@ -29,7 +29,7 @@ def validate_csv(csv_path: str) -> bool:
         bool: True if the CSV is valid, False otherwise.
     """
     csv_df = pd.read_csv(csv_path)
-    
+
     for index, row in csv_df.iterrows():
         if row['catalog'] and not row['schema']:
             print(f"Invalid row at index {index}: Catalog is given without a schema.")
@@ -37,5 +37,5 @@ def validate_csv(csv_path: str) -> bool:
         if row['schema'] and not row['table']:
             print(f"Invalid row at index {index}: Schema is given without a table name.")
             return False
-    
+
     return True

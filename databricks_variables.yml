@@ -99,5 +99,5 @@ variables:
     default: |
         {
         "DBX": "Databricks",
-        "WHO": "World Health Organization",       
+        "WHO": "World Health Organization",
         }

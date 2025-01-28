@@ -1,10 +1,10 @@
 import os
 from src.dbxmetagen.error_handling import validate_csv
 from src.dbxmetagen.processing import (
-    setup_ddl, 
-    create_tables, 
-    setup_queue, 
-    upsert_table_names_to_control_table, 
+    setup_ddl,
+    create_tables,
+    setup_queue,
+    upsert_table_names_to_control_table,
     generate_and_persist_metadata
 )
 from src.dbxmetagen.config import MetadataConfig

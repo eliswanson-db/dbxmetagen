@@ -22,7 +22,7 @@ class Response(BaseModel):
     table: str
     columns: List[str]
 
-    
+
 class PIResponse(Response):
     model_config = ConfigDict(extra="forbid")
 
@@ -57,15 +57,15 @@ class CommentGenerator(MetadataGenerator):
         if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         comment_response, message_payload = self.get_comment_response(
-            self.config, 
-            content=prompt_content, 
-            prompt_content=prompt[self.config.mode], 
-            model=self.config.model, 
-            max_tokens=self.config.max_tokens, 
+            self.config,
+            content=prompt_content,
+            prompt_content=prompt[self.config.mode],
+            model=self.config.model,
+            max_tokens=self.config.max_tokens,
             temperature=self.config.temperature
         )
         return comment_response, message_payload
-    
+
     def predict_chat_response(self, prompt_content):
         self.chat_response = self.openai_client.chat.completions.create(
             messages=prompt_content,
@@ -75,14 +75,14 @@ class CommentGenerator(MetadataGenerator):
         )
         return self.chat_response
 
-    def get_comment_response(self, 
+    def get_comment_response(self,
                              config: MetadataConfig,
-                             content: str, 
-                             prompt_content: str, 
-                             model: str, 
-                             max_tokens: int, 
+                             content: str,
+                             prompt_content: str,
+                             model: str,
+                             max_tokens: int,
                              temperature: float,
-                             retries: int = 0, 
+                             retries: int = 0,
                              max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
         try:
             chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
@@ -123,7 +123,7 @@ class CommentGenerator(MetadataGenerator):
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
         if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
             raise ValueError("Column names do not match column contents")
-    
+
     @staticmethod
     def _check_list_and_dict_keys_match(dict_list, string_list):
         if isinstance(dict_list, list):
@@ -131,7 +131,7 @@ class CommentGenerator(MetadataGenerator):
         else:
             try:
                 dict_keys = dict_list.keys()
-            except: 
+            except:
                 raise TypeError("dict_list is not a list or a dictionary")
         list_matches_keys = all(item in dict_keys for item in string_list)
         keys_match_list = all(key in string_list for key in dict_keys)
@@ -145,15 +145,15 @@ class PIIdentifier(MetadataGenerator):
         if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
         comment_response, message_payload = self.get_comment_response(
-            self.config, 
-            content=prompt_content, 
-            prompt_content=prompt[self.config.mode], 
-            model=self.config.model, 
-            max_tokens=self.config.max_tokens, 
+            self.config,
+            content=prompt_content,
+            prompt_content=prompt[self.config.mode],
+            model=self.config.model,
+            max_tokens=self.config.max_tokens,
             temperature=self.config.temperature
         )
         return comment_response, message_payload
-    
+
     def predict_chat_response(self, prompt_content):
         self.chat_response = self.openai_client.chat.completions.create(
             messages=prompt_content,
@@ -163,14 +163,14 @@ class PIIdentifier(MetadataGenerator):
         )
         return self.chat_response
 
-    def get_comment_response(self, 
+    def get_comment_response(self,
                              config: MetadataConfig,
-                             content: str, 
-                             prompt_content: str, 
-                             model: str, 
-                             max_tokens: int, 
+                             content: str,
+                             prompt_content: str,
+                             model: str,
+                             max_tokens: int,
                              temperature: float,
-                             retries: int = 0, 
+                             retries: int = 0,
                              max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
         try:
             chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
@@ -211,7 +211,7 @@ class PIIdentifier(MetadataGenerator):
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
         if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
             raise ValueError("Column names do not match column contents")
-    
+
     @staticmethod
     def _check_list_and_dict_keys_match(dict_list, string_list):
         if isinstance(dict_list, list):
@@ -219,14 +219,14 @@ class PIIdentifier(MetadataGenerator):
         else:
             try:
                 dict_keys = dict_list.keys()
-            except: 
+            except:
                 raise TypeError("dict_list is not a list or a dictionary")
         list_matches_keys = all(item in dict_keys for item in string_list)
         keys_match_list = all(key in string_list for key in dict_keys)
         if not (list_matches_keys and keys_match_list):
             return False
         return True
-    
+
 
 class MetadataGeneratorFactory:
     @staticmethod
@@ -241,4 +241,3 @@ class MetadataGeneratorFactory:
             return generator
         else:
             raise ValueError("Invalid mode. Use 'pi' or 'comment'.")
-

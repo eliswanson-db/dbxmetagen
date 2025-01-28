@@ -2,8 +2,6 @@ import yaml
 
 class MetadataConfig:
     ACRO_CONTENT = {
-        "DBX": "Databricks",
-        "WHO": "World Health Organization",       
         }
     SETUP_PARAMS = {
         "yaml_file_path": "../databricks_variables.yml",
@@ -11,7 +9,7 @@ class MetadataConfig:
     }
     MODEL_PARAMS = {
     }
-    
+
     def __init__(self, **kwargs):
         print(kwargs)
         self.setup_params = self.__class__.SETUP_PARAMS
@@ -20,10 +18,10 @@ class MetadataConfig:
 
         for key, value in self.setup_params.items():
             setattr(self, key, value)
-        
+
         for key, value in self.model_params.items():
             setattr(self, key, value)
-        
+
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -31,7 +29,7 @@ class MetadataConfig:
         print("yaml_variables:", yaml_variables)
         for key, value in yaml_variables.items():
             setattr(self, key, value)
-        
+
         self.instantiate_environments()
 
     def load_yaml(self):
@@ -40,7 +38,7 @@ class MetadataConfig:
         selected_variables = {key: variables['variables'][key]['default'] for key in self.yaml_variable_names if key in variables['variables']}
         print("selected variables", selected_variables)
         return selected_variables
-    
+
     def instantiate_environments(self):
         if self.env == "dev":
             self.base_url = self.dev_host
@@ -54,5 +52,3 @@ class MetadataConfig:
             self.base_url = self.prod_host
         else:
             raise Exception(f"Environment {self.env} does not match any provided host in variables.yml.")
-        
-

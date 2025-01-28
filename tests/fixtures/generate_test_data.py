@@ -127,5 +127,3 @@ spark.sql(f"ANALYZE TABLE {orders_table} COMPUTE STATISTICS FOR ALL COLUMNS;")
 spark.sql(f"ANALYZE TABLE {products_table} COMPUTE STATISTICS FOR ALL COLUMNS;")
 
 # COMMAND ----------
-
-
