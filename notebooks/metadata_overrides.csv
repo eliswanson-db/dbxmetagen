@@ -1,4 +1,3 @@
 catalog,schema,table,column,comment,has_pi,pi_classification
 ,,,ssn,,TRUE,PII
-healthcare,bronze,charts,medical_notes,,TRUE,PHI
 dbxmetagen,default,healthcare_details,Name,,TRUE,PII

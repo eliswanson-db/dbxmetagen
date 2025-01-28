@@ -31,14 +31,18 @@ Four personas are expected for use of this project. Each of them will have a spe
 
 Note that these personas do not need to be experts in the domain, but the more knowledge they have the more effective they can be, especially when trying to extend this tool.
 
-Finally, these personas can in theory all be the same person, though this would be unlikely at many organizations. These are not different people, they are different roles or personas.
+Finally, these personas can in theory all be the same person, though this would be unlikely at many organizations. These are not different people, they are different roles or personas.\
 
-<img src="images/personas.png" alt="User Personas" width="400" top-margin="50">
+<img src="images/personas.png" alt="User Personas" width="400" top-margin="50">\
 
-<img src="images/simple_workflow.png" alt="User Process Flow - simple" width="1000">
+The simplest workflow available can just be done by one user. Clone the repo into a Databricks Git Folder, or unpack into a Workspace folder. Update variables.yml in the project root. Specifically, you will need to update the host and catalog name. Review variables.yml and update necessary variables. You can update the env and mode widgets in notebooks/generate_metadata.
 
-<img src="images/complex_notebook_workflow.png" alt="User Process Flow - complex" width="1000">
+Optional workflow:
+1. Adjust PI definitions
+1. Add to acronyms
 
+
+<img src="images/basic_workflow.png" alt="User Process Flow - simple" width="1000">
 
 ### Setup
 1. Clone the Repo into Databricks or locally
