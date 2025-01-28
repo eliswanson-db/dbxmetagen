@@ -25,6 +25,21 @@ There are a few key sections in this notebook:
   - Creation of DDL scripts, one for each table, that have the DDL commands to `ALTER TABLE` to add comments to table and columns. This is to help integrate with your CI/CD processes, in case you do not have access in a production environment
 - Application of the functions above to generate metadata and DDL for the list of tables provided in `dbxmetagen/table_names.csv`
 
+### User Guide
+
+Four personas are expected for use of this project. Each of them will have a specific role in making sure that this tool is used properly.
+
+Note that these personas do not need to be experts in the domain, but the more knowledge they have the more effective they can be, especially when trying to extend this tool.
+
+Finally, these personas can in theory all be the same person, though this would be unlikely at many organizations. These are not different people, they are different roles or personas.
+
+<img src="images/personas.png" alt="User Personas" width="400" top-margin="50">
+
+<img src="images/simple_workflow.png" alt="User Process Flow - simple" width="1000">
+
+<img src="images/complex_notebook_workflow.png" alt="User Process Flow - complex" width="1000">
+
+
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster without further deployment.
@@ -41,11 +56,10 @@ There are a few key sections in this notebook:
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Configurations
-1. Catalog name, host url, and schema name in resources/variables/variables.yml
-1.
+1. Most configurations that users should change are in databricks_variables.yml
 
 ### Current status
-1. Tested on DBR 15.4ML LTS
+1. Tested on DBR 15.4 ML LTS and 14.3 ML LTS.
 1. Default settings currently create ALTER scripts and puts in a volume. Tested in a databricks workspace.
 1. Some print-based logging to make understanding what's happening and debugging easy in the UI.
 
