@@ -11,6 +11,9 @@ variables:
   format_catalog:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
     default: false
+  model:
+    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed.
+    default: databricks-meta-llama-3-1-70b-instruct    
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
     default: false
@@ -71,6 +74,12 @@ variables:
   volume_name:
     description: volume name in which to store DDL files.
     default: generated_metadata
+  registered_model_name:
+    description: registered model name
+    default: default
+  model_type:
+    description: Model type
+    default: default
   table_names_source:
     description: Path variable to table names. Don't edit unless you know what you're doing.
     default: csv_file_path
@@ -79,7 +88,7 @@ variables:
     default: table_names.csv
   control_table:
     description: Control table name.
-    default: metadata_control
+    default: ${var.current_user}_metadata_control
   dry_run:
     description: Whether to perform a dry run. Not yet implemented, though if volume_name is set to null and apply_ddl is set to false this effectively is a dry run. Similarly, just setting apply_ddl to false is in a way a dry run.
     default: false
@@ -92,12 +101,3 @@ variables:
   current_working_directory:
     description: Working directory or bundle root.
     default: /Users/${var.current_user}/.bundle/${bundle.name}/${bundle.target}
-  model:
-    description: model name
-    default: databricks-meta-llama-3-1-70b-instruct
-  registered_model_name:
-    description: registered model name
-    default: null
-  model_type:
-    description: Model type
-    default: null

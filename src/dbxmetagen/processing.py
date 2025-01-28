@@ -506,7 +506,7 @@ def get_generated_metadata(
         sampled_chunk = sample_df(chunk, nrows, config.sample_size)
         prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
         prompt_messages = prompt.create_prompt_template()
-        if config.registered_model_name:
+        if config.registered_model_name != "default":
             call_registered_model(config, prompt)
         else:
             chat_response = MetadataGeneratorFactory.create_generator(config)

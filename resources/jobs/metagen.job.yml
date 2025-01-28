@@ -10,15 +10,20 @@ resources:
       tasks:
         - task_key: notebook_task
           job_cluster_key: metadata_generator_cluster
+        
           notebook_task:
+            base_parameters:
+              name: mode
+              default: "pi"
             notebook_path: ../../notebooks/generate_metadata.py
           libraries:
             - whl: ../../dist/*.whl
-        - task_key: wheel_task
-          job_cluster_key: metadata_generator_cluster
-          python_wheel_task:
-            entry_point: main
-            package_name: dbxmetagen
+
+          notebook_task:
+            base_parameters:
+              name: mode
+              default: "comment"
+            notebook_path: ../../notebooks/generate_metadata.py
           libraries:
             - whl: ../../dist/*.whl
 
