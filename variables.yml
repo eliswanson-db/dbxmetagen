@@ -88,7 +88,7 @@ variables:
     default: table_names.csv
   control_table:
     description: Control table name.
-    default: ${var.current_user}_metadata_control
+    default: metadata_control
   dry_run:
     description: Whether to perform a dry run. Not yet implemented, though if volume_name is set to null and apply_ddl is set to false this effectively is a dry run. Similarly, just setting apply_ddl to false is in a way a dry run.
     default: false
