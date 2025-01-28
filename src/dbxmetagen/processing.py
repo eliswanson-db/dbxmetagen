@@ -574,7 +574,10 @@ def replace_catalog_name(config, full_table_name):
     if len(parts) != 3:
         raise ValueError("full_table_name must be in the format 'catalog.schema.table'")
     catalog_name, schema_name, table_name = parts
-    replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name).format(env=config.env)
+    if config.format_catalog:
+        replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name).format(env=config.env)
+    else:
+        replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
     print("replaced catalog name", replaced_catalog_name)
     return f"{replaced_catalog_name}.{schema_name}.{table_name}"
 
