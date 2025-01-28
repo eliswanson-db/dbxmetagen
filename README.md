@@ -5,7 +5,7 @@
 # `dbxmetagen` Overview
 ### This is a utility to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer for enterprise data. In addition, it can identify PI and classify it into PII, PHI, PCI.
 
-While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata. This utility, `dbxmetagen`, helps generate table and column descriptions, and identify and classify PI at scale in a bulk fashion with multiple options for bringing the outputs into an organization's SDLC.
+While Databricks does offer [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), this is not sustainable at scale as a human must manually select and approve AI generated metadata in a UI. This utility, `dbxmetagen`, helps generate table and column descriptions, and identify and classify PI at scale in a bulk fashion with multiple options for bringing the outputs into an organization's SDLC. Note that the need for human approval has not changed, simply that bulk generation and an ability to integrate with SDLC through customizable DDL or direct application significantly streamline the process.
 
 ### Disclaimer
 
@@ -44,6 +44,8 @@ Optional workflow:
 
 <img src="images/basic_workflow.png" alt="User Process Flow - simple" width="1000">
 
+We also provide a more complex workflow that offers more options, but significantly more complexity. Please test out the simplified workflow to start.
+
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster without further deployment.
@@ -60,7 +62,7 @@ Optional workflow:
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in the config.py file separately, or you can use a three-level namespace for these table names.
 
 ### Configurations
-1. Most configurations that users should change are in databricks_variables.yml
+1. Most configurations that users should change are in variables.yml
 
 ### Current status
 1. Tested on DBR 15.4 ML LTS and 14.3 ML LTS.
@@ -71,6 +73,5 @@ Optional workflow:
 1. Throttling - the default PPT endpoints will throttle eventually. Likely this will occur wehn running backfills for large numbers of tables, or if you have other users using the same endpoint.
 1. Sampling - setting a reasonable sample size for data will serve to provide input from column contents without leading to swamping of column names.
 1. Chunking - running a smaller number of columns at once will result in more attention paid and more tokens PER column but will probably cost slightly more and take longer.
-1. One of the easiest ways to speed this up and get terser answers is to ramp up the columns per call - compare 5 and 50 for example.
+1. One of the easiest ways to speed this up and get terser answers is to ramp up the columns per call - compare 5 and 50 for example. This will impact complexity of results.
 1. Larger chunks will result in simpler comments with less creativity and elaboration.
-1. Library versions - note that requirements.txt carry a different set of versions than the notebook install. Recommend using these versions for jobs clusters and for model registration, but they are not all needed for the notebook run as of DBR 15.4 ML, only the pydantic install.
