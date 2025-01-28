@@ -4,7 +4,7 @@ class MetadataConfig:
     ACRO_CONTENT = {
         }
     SETUP_PARAMS = {
-        "yaml_file_path": "../databricks_variables.yml",
+        "yaml_file_path": "../variables.yml",
         "yaml_variable_names": ['dev_host', 'prod_host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'temperature', 'add_metadata', 'acro_content']
     }
     MODEL_PARAMS = {

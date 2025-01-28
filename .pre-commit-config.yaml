@@ -13,9 +13,9 @@ repos:
       - id: pretty-format-json
         args: [--autofix, --no-ensure-ascii, --no-sort-keys]
       - id: check-ast
-        exclude: (^notebooks/generate_metadata\.py$|^notebooks/models/log_and_register_model\.py$)
+        files: ^notebooks/*.py$
       - id: debug-statements
-        exclude: ^notebooks/generate_metadata\.py$
+        files: ^notebooks/*.py$
       - id: check-docstring-first
 
   - repo: https://github.com/python-poetry/poetry-plugin-export
