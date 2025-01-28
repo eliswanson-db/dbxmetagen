@@ -26,7 +26,9 @@ resources:
             notebook_path: ../../notebooks/generate_metadata.py
           libraries:
             - whl: ../../dist/*.whl
-
+      parameters:
+        - name: table_names
+          default: default.attainable_yields, default.healthcare_details
       job_clusters:
         - job_cluster_key: metadata_generator_cluster
           new_cluster:
