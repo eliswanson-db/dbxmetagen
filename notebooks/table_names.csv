@@ -1,2 +1,4 @@
 table_name
-dbxmetagen.default.attainable_yields
+dbxmetagen.default.simple_test
+dbxmetagen.default.finance_test
+dbxmetagen.default.healthcare_test

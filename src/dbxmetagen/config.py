@@ -5,7 +5,7 @@ class MetadataConfig:
         }
     SETUP_PARAMS = {
         "yaml_file_path": "../variables.yml",
-        "yaml_variable_names": ['host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'format_catalog', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'temperature', 'add_metadata', 'acro_content']
+        "yaml_variable_names": ['host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'format_catalog', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'override_csv_path', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'temperature', 'add_metadata', 'acro_content']    
     }
     MODEL_PARAMS = {
     }
@@ -31,6 +31,8 @@ class MetadataConfig:
             setattr(self, key, value)
 
         self.instantiate_environments()
+
+        print(self.current_user)
 
     def load_yaml(self):
         with open(self.yaml_file_path, 'r') as file:
