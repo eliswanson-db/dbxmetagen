@@ -27,8 +27,8 @@ resources:
           libraries:
             - whl: ../../dist/*.whl
       parameters:
-        - name: table_names
-          default: default.attainable_yields, default.healthcare_details
+        - name: job_table_names
+          default: default.simple_test, default.healthcare_test, default.finance_test
       job_clusters:
         - job_cluster_key: metadata_generator_cluster
           new_cluster:

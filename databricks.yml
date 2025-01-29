@@ -17,6 +17,9 @@ targets:
   dev:
     mode: development
     default: true
+    variables: 
+      job_table_names: default.simple_test
+
     workspace:
       root_path: ${var.current_working_directory}
       host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update dev host name here to use DAB deploy>

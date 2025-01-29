@@ -1,3 +1,3 @@
-catalog,schema,table,column,comment,has_pi,pi_classification
-,,,ssn,,TRUE,PII
-dbxmetagen,default,healthcare_details,Name,,TRUE,PII
+catalog,schema,table,column,comment,classification,type
+,,,ssn,,pi,pii
+dbxmetagen,default,healthcare_test,room_number,Hospital room number - TEST OVERRIDE,pi,pii

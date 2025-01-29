@@ -17,7 +17,7 @@ from pyspark.sql import DataFrame, SparkSession, Row
 from pyspark.sql.functions import (
     col, struct, to_timestamp, current_timestamp, lit, when, 
     sum as spark_sum, max as spark_max, concat_ws, collect_list, 
-    collect_set, udf, trim
+    collect_set, udf, trim, split
 )
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType, FloatType
 
@@ -33,6 +33,9 @@ from src.dbxmetagen.comment_summarizer import TableCommentSummarizer
 from src.dbxmetagen.metadata_generator import (
     Response, PIResponse, CommentResponse, MetadataGeneratorFactory, 
     PIIdentifier, MetadataGenerator, CommentGenerator
+)
+from src.dbxmetagen.overrides import (override_metadata_from_csv, apply_overrides_with_loop, 
+    apply_overrides_with_joins, build_condition, get_join_conditions
 )
 
 logging.basicConfig(
@@ -366,7 +369,8 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog_name}.{config.schema_name}.{config.control_table}"
+    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     update_query = f"""
     UPDATE {control_table}
     SET _deleted_at = current_timestamp(),
@@ -578,7 +582,7 @@ def replace_catalog_name(config, full_table_name):
         replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name).format(env=config.env)
     else:
         replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
-    print("replaced catalog name", replaced_catalog_name)
+    logger.debug("Replaced catalog name...", replaced_catalog_name)
     return f"{replaced_catalog_name}.{schema_name}.{table_name}"
 
 
@@ -612,46 +616,17 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
         DataFrame: The unioned DataFrame with DDL statements added.
     """
     column_df, table_df = review_and_generate_metadata(config, table_name)
-    #if column_df.columns is not None and table_df.columns is not None:
+    if column_df is not None:
+        column_df = split_fully_scoped_table_name(column_df, 'table')
+        logger.info("column df columns", column_df.columns)
+    if table_df is not None:
+        table_df = split_fully_scoped_table_name(table_df, 'table')
+        logger.info("table df columns", table_df.columns)
+    if config.override_csv_path:
+        logger.info("Overriding metadata from CSV...")
+        column_df = override_metadata_from_csv(column_df, config.override_csv_path, config)
     dfs = add_ddl_to_dfs(config, table_df, column_df, table_name)
     return dfs
-
-
-def override_metadata_from_csv(df: DataFrame, csv_path: str) -> DataFrame:
-    """
-    Overrides the type and classification in the DataFrame based on the CSV file.
-    This would need to be optimized if a customer has a large number of overrides.
-
-    Args:
-        df (DataFrame): The input DataFrame.
-        csv_path (str): The path to the CSV file.
-
-    Returns:
-        DataFrame: The updated DataFrame with overridden type and classification.
-    """
-    csv_df = pd.read_csv(csv_path)
-
-    spark = SparkSession.builder.getOrCreate()
-    csv_spark_df = spark.createDataFrame(csv_df)
-
-    # TODO: This needs to be optimized.
-    for row in csv_spark_df.collect():
-        catalog = row['catalog']
-        schema = row['schema']
-        table = row['table']
-        column = row['column']
-        type_override = row['pi_classification']
-
-        condition = (col('table_name') == table)
-        if schema:
-            condition = condition & (col('schema_name') == schema)
-        if catalog:
-            condition = condition & (col('catalog_name') == catalog)
-
-        df = df.withColumn('type', when(condition, lit(type_override)).otherwise(col('type')))
-        df = df.withColumn('classification', when(condition, lit(type_override)).otherwise(col('classification')))
-
-    return df
 
 
 def add_ddl_to_dfs(config, table_df, column_df, table_name):
@@ -702,7 +677,7 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
                                     .withColumn("classification", lit(table_classification)) \
                                     .withColumn("table_name", lit(table_name))
     pi_table_row = add_table_ddl_to_pi_df(pi_table_row, 'ddl')
-    print("PI table rows nrows", pi_table_row.count())
+    logger.info("PI table rows...", pi_table_row.count())
     return pi_table_row.select(column_df.columns)
 
 
@@ -717,7 +692,6 @@ def determine_table_classification(pi_rows: DataFrame) -> str:
         str: The determined classification.
     """
     classification_set = set(pi_rows.select(collect_set("type")).first()[0])
-    print("Classification set:", classification_set)
 
     if classification_set == {"None"}:
         return "None"
@@ -763,7 +737,6 @@ def setup_ddl(config: MetadataConfig) -> None:
     ### Add error handling here
     if config.schema_name:
         spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog_name}.{config.schema_name};")
-    print("Catalog name, schema name, volume name")
     print(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
@@ -781,7 +754,22 @@ def create_tables(config: MetadataConfig) -> None:
     """
     spark = SparkSession.builder.getOrCreate()
     if config.control_table:
-        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+        logger.info("Formatted control table...", formatted_control_table)
+        spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{formatted_control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
+
+
+def sanitize_email(email: str) -> str:
+    """
+    Replaces '@' and '.' in an email address with '_'.
+
+    Args:
+        email (str): The email address to sanitize.
+
+    Returns:
+        str: The sanitized email address.
+    """
+    return email.replace('@', '_').replace('.', '_')
 
 
 def instantiate_metadata_objects(env, mode, catalog_name=None, schema_name=None, table_names=None, base_url=None):
@@ -851,7 +839,8 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog_name}.{config.schema_name}.{config.control_table}"
+    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
@@ -860,7 +849,6 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
     combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog_name)
-    print("Combined table names", combined_table_names)
     return combined_table_names
 
 
@@ -897,7 +885,8 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print(f"Upserting table names to control table {table_names}...")
     spark = SparkSession.builder.getOrCreate()
-    control_table = f"{config.catalog_name}.{config.schema_name}.{config.control_table}"
+    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     table_names = ensure_fully_scoped_table_names(table_names, config.catalog_name)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
     table_names_df = trim_whitespace_from_df(table_names_df)
@@ -919,11 +908,28 @@ def load_table_names_from_csv(csv_file_path):
     return table_names
 
 
+def split_fully_scoped_table_name(df: DataFrame, full_table_name_col: str) -> DataFrame:
+    """
+    Splits a fully scoped table name column into catalog, schema, and table columns.
+
+    Args:
+        df (DataFrame): The input DataFrame.
+        full_table_name_col (str): The name of the column containing the fully scoped table name.
+
+    Returns:
+        DataFrame: The updated DataFrame with catalog, schema, and table columns added.
+    """
+    split_col = split(col(full_table_name_col), '\.')
+    df = df.withColumn('catalog', split_col.getItem(0)) \
+           .withColumn('schema', split_col.getItem(1)) \
+           .withColumn('table_name', split_col.getItem(2))
+    return df
+
+
 def split_table_names(table_names: str) -> List[str]:
     if not table_names:
         return []
     return table_names.split(',')
-
 
 @udf
 def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
