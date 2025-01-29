@@ -40,6 +40,9 @@ variables:
   allow_manual_override:
     description: Whether to allow manual overrides to fields. manual override csv allows overrides to be specified in a CSV.
     default: true
+  override_csv_path:
+    description: Path and name of csv to be used for manual overrides.
+    default: metadata_overrides.csv
   tag_none_fields:
     description: Whether to tag fields with no PI, or not apply any tags. If a field is classified as 'None' in PI, it won't get tagged.
     default: true
@@ -86,18 +89,18 @@ variables:
   source_file_path:
     description: Path to the source file used in identifying table names.
     default: table_names.csv
-  control_table:
-    description: Control table name.
-    default: ${var.current_user}_metadata_control
-  dry_run:
-    description: Whether to perform a dry run. Not yet implemented, though if volume_name is set to null and apply_ddl is set to false this effectively is a dry run. Similarly, just setting apply_ddl to false is in a way a dry run.
-    default: false
-  pi_column_field_names:
-    description: Field names for PI columns. Not yet implemented. Will allow name changes and alternate schemas for tag names. Currently, the code must be changed.
-    default: default
   current_user:
     description: User deploying the bundle. Can apply to service principals as well.
     default: ${workspace.current_user.userName}
   current_working_directory:
     description: Working directory or bundle root.
     default: /Users/${var.current_user}/.bundle/${bundle.name}/${bundle.target}
+  control_table:
+    description: Control table name.
+    default: "metadata_control_{}"
+  dry_run:
+    description: Whether to perform a dry run. Not yet implemented, though if volume_name is set to null and apply_ddl is set to false this effectively is a dry run. Similarly, just setting apply_ddl to false is in a way a dry run.
+    default: false
+  pi_column_field_names:
+    description: Field names for PI columns. Not yet implemented. Will allow name changes and alternate schemas for tag names. Currently, the code must be changed.
+    default: default

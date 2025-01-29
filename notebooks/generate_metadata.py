@@ -81,6 +81,7 @@ table_names = split_table_names(dbutils.widgets.get("table_names"))
 mode = dbutils.widgets.get("mode")
 env = dbutils.widgets.get("env")
 base_url = dbutils.widgets.get("base_url")
+current_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
 notebook_variables = {
     "catalog_name": catalog_name,
     "dest_schema": dest_schema,
@@ -88,6 +89,7 @@ notebook_variables = {
     "mode": mode,
     "env": env,
     "base_url": base_url,
+    "current_user": current_user,
 }
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
