@@ -582,7 +582,7 @@ def replace_catalog_name(config, full_table_name):
         replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name).format(env=config.env)
     else:
         replaced_catalog_name = catalog_tokenizable.replace('__CATALOG_NAME__', catalog_name)
-    print("replaced catalog name", replaced_catalog_name)
+    logger.debug("Replaced catalog name...", replaced_catalog_name)
     return f"{replaced_catalog_name}.{schema_name}.{table_name}"
 
 
@@ -618,10 +618,10 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     column_df, table_df = review_and_generate_metadata(config, table_name)
     if column_df is not None:
         column_df = split_fully_scoped_table_name(column_df, 'table')
-        print("column df columns", column_df.columns)
+        logger.info("column df columns", column_df.columns)
     if table_df is not None:
         table_df = split_fully_scoped_table_name(table_df, 'table')
-        print("table df columns", table_df.columns)
+        logger.info("table df columns", table_df.columns)
     if config.override_csv_path:
         logger.info("Overriding metadata from CSV...")
         column_df = override_metadata_from_csv(column_df, config.override_csv_path, config)
@@ -677,7 +677,7 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
                                     .withColumn("classification", lit(table_classification)) \
                                     .withColumn("table_name", lit(table_name))
     pi_table_row = add_table_ddl_to_pi_df(pi_table_row, 'ddl')
-    print("PI table rows nrows", pi_table_row.count())
+    logger.info("PI table rows...", pi_table_row.count())
     return pi_table_row.select(column_df.columns)
 
 
@@ -692,7 +692,6 @@ def determine_table_classification(pi_rows: DataFrame) -> str:
         str: The determined classification.
     """
     classification_set = set(pi_rows.select(collect_set("type")).first()[0])
-    print("Classification set:", classification_set)
 
     if classification_set == {"None"}:
         return "None"
@@ -738,7 +737,6 @@ def setup_ddl(config: MetadataConfig) -> None:
     ### Add error handling here
     if config.schema_name:
         spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog_name}.{config.schema_name};")
-    print("Catalog name, schema name, volume name")
     print(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
@@ -757,7 +755,7 @@ def create_tables(config: MetadataConfig) -> None:
     spark = SparkSession.builder.getOrCreate()
     if config.control_table:
         formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
-        print("formatted control table", formatted_control_table)
+        logger.info("Formatted control table...", formatted_control_table)
         spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{formatted_control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
 
@@ -851,7 +849,6 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
     combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog_name)
-    print("Combined table names", combined_table_names)
     return combined_table_names
 
 

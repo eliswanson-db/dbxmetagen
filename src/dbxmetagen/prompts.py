@@ -244,6 +244,7 @@ class CommentPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
+        print("Creating comment prompt template...")
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
@@ -395,6 +396,7 @@ class CommentNoDataPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
+        print("Creating comment prompt template with no data in comments...")
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
