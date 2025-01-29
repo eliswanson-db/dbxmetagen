@@ -31,18 +31,20 @@ Four personas are expected for use of this project. Each of them will have a spe
 
 Note that these personas do not need to be experts in the domain, but the more knowledge they have the more effective they can be, especially when trying to extend this tool.
 
-Finally, these personas can in theory all be the same person, though this would be unlikely at many organizations. These are not different people, they are different roles or personas.\\
+Finally, these personas can in theory all be the same person, though this would be unlikely at many organizations. These are not different people, they are different roles or personas. 
 
-<img src="images/personas.png" alt="User Personas" width="400" top-margin="50">\\
+<img src="images/personas.png" alt="User Personas" width="400" top-margin="50">
 
-The simplest workflow available can just be done by one user. Clone the repo into a Databricks Git Folder, or unpack into a Workspace folder. Update variables.yml in the project root. Specifically, you will need to update the host and catalog name. Review variables.yml and update necessary variables. You can update the env and mode widgets in notebooks/generate_metadata. Update table_names.csv in notebooks/table_names.csv
+The simplest workflow available can just be done by one user. Clone the repo into a Databricks Git Folder, or unpack into a Workspace folder. Update variables.yml in the project root. Specifically, you will need to update the host and catalog name. Review variables.yml and update necessary variables. You can update the env and mode widgets in notebooks/generate_metadata. Update table_names.csv in notebooks/table_names.csv. Alternatively, use an asset bundle approach, either in the web terminal or locally. Web terminal is not compatible with privatelink.
 
 Optional workflow:
 1. Adjust PI definitions
 1. Add to acronyms
 1. Adjust other secondary options. There are a number of possibe variables to adjust in variables.yml, explained in the yml file with descriptions.
 
-<img src="images/basic_workflow.png" alt="User Process Flow - simple" width="1000">
+<img src="images/workflow1.png" alt="User Process Flow - simple" width="1000"> 
+
+<img src="images/simple_dab_workflow.png" alt="User Process Flow - simple" width="1200"> 
 
 We also provide a more complex workflow that offers more options, but significantly more complexity. Please test out the simplified workflow to start.
 

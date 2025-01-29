@@ -13,7 +13,10 @@ variables:
     default: false
   model:
     description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed.
-    default: databricks-meta-llama-3-1-70b-instruct    
+    default: databricks-meta-llama-3-1-70b-instruct
+  job_table_names:
+    description: default table names - get applied if there are no host overrides.
+    default: default.simple_test
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
     default: false
