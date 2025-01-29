@@ -3,8 +3,9 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col, lit, when
 from pyspark.sql.column import Column
 from typing import List
+from src.dbxmetagen.config import MetadataConfig
 
-def override_metadata_from_csv(df: DataFrame, csv_path: str) -> DataFrame:
+def override_metadata_from_csv(df: DataFrame, csv_path: str, config: MetadataConfig) -> DataFrame:
     """
     Overrides the type and classification in the DataFrame based on the CSV file.
     This would need to be optimized if a customer has a large number of overrides.
@@ -24,13 +25,13 @@ def override_metadata_from_csv(df: DataFrame, csv_path: str) -> DataFrame:
     if nrows == 0:
         return df
     elif nrows < 1000:
-        df = apply_overrides_with_loop(df, csv_spark_df)
+        df = apply_overrides_with_loop(df, csv_spark_df, config)
     else:
-        df = apply_overrides_with_joins(df, csv_spark_df)
+        df = apply_overrides_with_joins(df, csv_spark_df, config)
 
     return df
 
-def apply_overrides_with_loop(df: DataFrame, csv_spark_df: DataFrame) -> DataFrame:
+def apply_overrides_with_loop(df: DataFrame, csv_spark_df: DataFrame, config: MetadataConfig) -> DataFrame:
     """
     Applies overrides using a loop for small CSV files.
 
@@ -41,17 +42,27 @@ def apply_overrides_with_loop(df: DataFrame, csv_spark_df: DataFrame) -> DataFra
     Returns:
         DataFrame: The updated DataFrame with overridden type and classification.
     """
-    for row in csv_spark_df.collect():
-        catalog = row['catalog']
-        schema = row['schema']
-        table = row['table']
-        column = row['column'] if 'column' in row else None
-        type_override = row['pi_classification']
-
+    if config.mode == "pi":
+        for row in csv_spark_df.collect():
+            catalog = row['catalog']
+            schema = row['schema']
+            table = row['table']
+            column = row['column'] if 'column' in row else None
+            type_override = row['pi_classification']
         condition = build_condition(df, table, column, schema, catalog)
-        print("Condition", condition)
         df = df.withColumn('type', when(condition, lit(type_override)).otherwise(col('type')))
         df = df.withColumn('classification', when(condition, lit(type_override)).otherwise(col('classification')))
+    elif config.mode == "comment":
+        for row in csv_spark_df.collect():
+            catalog = row['catalog']
+            schema = row['schema']
+            table = row['table']
+            column = row['column'] if 'column' in row else None
+            type_override = row['comment']
+        condition = build_condition(df, table, column, schema, catalog)
+        df = df.withColumn('column_content', when(condition, lit(type_override)).otherwise(col('column_content')))
+    else:
+        raise ValueError("Invalid mode provided.")
     return df
 
 def apply_overrides_with_joins(df: DataFrame, csv_spark_df: DataFrame) -> DataFrame:
@@ -90,7 +101,7 @@ def build_condition(df: DataFrame, table: str, column: str, schema: str, catalog
     """
     condition = (col('table') == table)
     if column:
-        condition = condition & (col('column') == column)
+        condition = condition & (col('column_name') == column)
     if schema:
         condition = condition & (col('schema') == schema)
     if catalog:
@@ -112,18 +123,18 @@ def get_join_conditions(df: DataFrame, csv_spark_df: DataFrame) -> List[Column]:
         (df['catalog'] == csv_spark_df['catalog']) & 
         (df['schema'] == csv_spark_df['schema']) & 
         (df['table'] == csv_spark_df['table']) & 
-        (df['column'] == csv_spark_df['column'])
+        (df['column_name'] == csv_spark_df['column'])
     ]
 
     join_condition_schema_table_column = [
         (df['schema'] == csv_spark_df['schema']) & 
         (df['table'] == csv_spark_df['table']) & 
-        (df['column'] == csv_spark_df['column'])
+        (df['column_name'] == csv_spark_df['column'])
     ]
 
     join_condition_table_column = [
         (df['table'] == csv_spark_df['table']) & 
-        (df['column'] == csv_spark_df['column'])
+        (df['column_name'] == csv_spark_df['column'])
     ]
 
     join_condition_table = [

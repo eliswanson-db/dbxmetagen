@@ -17,7 +17,7 @@ from pyspark.sql import DataFrame, SparkSession, Row
 from pyspark.sql.functions import (
     col, struct, to_timestamp, current_timestamp, lit, when, 
     sum as spark_sum, max as spark_max, concat_ws, collect_list, 
-    collect_set, udf, trim
+    collect_set, udf, trim, split
 )
 from pyspark.sql.types import StructType, StructField, StringType, TimestampType, IntegerType, FloatType
 
@@ -616,8 +616,15 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
         DataFrame: The unioned DataFrame with DDL statements added.
     """
     column_df, table_df = review_and_generate_metadata(config, table_name)
+    if column_df is not None:
+        column_df = split_fully_scoped_table_name(column_df, 'table')
+        print("column df columns", column_df.columns)
+    if table_df is not None:
+        table_df = split_fully_scoped_table_name(table_df, 'table')
+        print("table df columns", table_df.columns)
     if config.override_csv_path:
-        column_df = override_metadata_from_csv(column_df, config.override_csv_path)
+        logger.info("Overriding metadata from CSV...")
+        column_df = override_metadata_from_csv(column_df, config.override_csv_path, config)
     dfs = add_ddl_to_dfs(config, table_df, column_df, table_name)
     return dfs
 
@@ -904,11 +911,28 @@ def load_table_names_from_csv(csv_file_path):
     return table_names
 
 
+def split_fully_scoped_table_name(df: DataFrame, full_table_name_col: str) -> DataFrame:
+    """
+    Splits a fully scoped table name column into catalog, schema, and table columns.
+
+    Args:
+        df (DataFrame): The input DataFrame.
+        full_table_name_col (str): The name of the column containing the fully scoped table name.
+
+    Returns:
+        DataFrame: The updated DataFrame with catalog, schema, and table columns added.
+    """
+    split_col = split(col(full_table_name_col), '\.')
+    df = df.withColumn('catalog', split_col.getItem(0)) \
+           .withColumn('schema', split_col.getItem(1)) \
+           .withColumn('table_name', split_col.getItem(2))
+    return df
+
+
 def split_table_names(table_names: str) -> List[str]:
     if not table_names:
         return []
     return table_names.split(',')
-
 
 @udf
 def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
