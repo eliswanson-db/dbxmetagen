@@ -244,6 +244,7 @@ class CommentPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
+        print("Creating comment prompt template...")
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
@@ -346,7 +347,9 @@ class PIPrompt(Prompt):
                     1. pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another.
                     2. Please don't respond with anything other than the dictionary.
                     3. Attempt to classify into None, PII, PCI, medical information, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. Medical Information: This includes any infromation in a medical record that cannot be used to identify an individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
-                    4. When health or medical information is not linked to any identifiers, it's not considered PHI under HIPAA, it is considered medical infrormation. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a table that has both medical information and patient names is considered PHI.
+                    4. When health or medical information is not linked to any identifiers, it's not considered PHI under HIPAA, it is considered medical infrormation. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a column or table that has both medical information and patient names is considered PHI.
+                    5. The value for classification should always be either "pi" or "None". The value for type should always be either "pii", "pci", "medical_information", or "phi".
+                    6. Any freeform medical information should be considered PHI, because it's not possible to guarantee it has no personal information. For example, "medical_notes", "chart_information", "doctor_notes".
 
                     ###
                     """
@@ -393,6 +396,7 @@ class CommentNoDataPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
+        print("Creating comment prompt template with no data in comments...")
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {

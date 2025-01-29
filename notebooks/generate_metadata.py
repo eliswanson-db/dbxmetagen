@@ -70,7 +70,7 @@ dbutils.widgets.text("catalog_name", "")
 dbutils.widgets.text("dest_schema", "")
 dbutils.widgets.text("base_url", "")
 dbutils.widgets.text("table_names", "")
-dbutils.widgets.text("mode", "comment")
+dbutils.widgets.dropdown("mode", "comment", ["comment", "pi"])
 dbutils.widgets.text("env", "")
 
 # COMMAND ----------
