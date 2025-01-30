@@ -44,6 +44,11 @@ dbutils.library.restartPython()
 
 # COMMAND ----------
 
+import sys
+sys.path.append('../')
+
+# COMMAND ----------
+
 import os
 from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.config import MetadataConfig
