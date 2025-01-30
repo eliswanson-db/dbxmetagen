@@ -91,6 +91,15 @@ We also provide a more complex workflow that offers more options, but significan
 1. Remember that PPT endpoints (the default) are not HIPAA compliant, you are responsible for setting up appropriate endpoints for your security needs.
 1. For 'pi' mode, the recommendation is to potentially use more rows of data, and smaller chunks given that scanning the data is important for identifying PI.
 
+### Common Options
+1. Output a tsv file vs. a sql file to a volume - modify ddl_output_format variable.
+1. Apply DDL to source table directly vs. output DDL code - modify apply_ddl variable.
+1. Attempt to not include any data in the comment for privacy or security reasons - set allow_data to false.
+1. add_metadata option sets whether or not table and column metadata are included in metadata generation or identification.
+1. format_catalog determines whether any brackets used in catalog_tokenizable will be formatted, or whether they will be kept as string literals.
+1. tag_none_fields determines if columns classified as 'None' for the purposes of PI classification should be tagged. If set to false, then these columns will not be tagged at all.
+1. word_limit_per_cell will truncate strings in any data cells in the same if they are longer than the value provided.
+
 ### Details of comment generation and PI identification
 1. PI identification and classification for columns is standard, but tables are classified based on the columns in the table, not as their own entity.
    1. If any column has PII, then the table has PII.
