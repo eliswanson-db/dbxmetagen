@@ -8,6 +8,7 @@ from abc import ABC
 from datetime import datetime
 from typing import List, Dict, Any, Literal, Tuple
 
+import csv
 import mlflow
 import nest_asyncio
 import pandas as pd
@@ -357,8 +358,7 @@ def populate_log_table(df, config, current_user, base_path):
                 .withColumn("columns_per_call", lit(config.columns_per_call))
                 .withColumn("status", lit("No Volume specified..."))
             )
-
-
+    
 
 def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     """
@@ -388,8 +388,7 @@ def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: s
     mark_as_deleted(table_name, config)
 
 
-def filter_and_write_ddl(granularity: str,
-                         df: DataFrame,                          
+def filter_and_write_ddl(df: DataFrame,                          
                          config: MetadataConfig,
                          base_path: str,
                          full_table_name: str,
@@ -409,16 +408,21 @@ def filter_and_write_ddl(granularity: str,
     df = df.filter(df['table'] == full_table_name)
     ddl_statements = df.select("ddl").collect()
     table_name = re.sub(r'[^\w\s/]', '_', full_table_name)
-    file_path = os.path.join(base_path, f"{table_name}_{config.mode}_{granularity}.sql")
+    file_root = f"{table_name}_{config.mode}"
     try:
-        write_ddl_to_volume(file_path, base_path, ddl_statements)
+        write_ddl_to_volume(file_root, base_path, ddl_statements, config.ddl_output_format)
         df = df.withColumn("status", lit("Success"))
         log_metadata_generation(df, config, full_table_name, base_path)
+    except ValueError as ve:
+        print(f"Error: {ve}")
+        df = df.withColumn("status", lit("Failed: Invalid output format"))
+    except IOError as ioe:
+        print(f"Error writing DDL to volume: {ioe}. Check if Volume exists and if your permissions are correct.")
+        df = df.withColumn("status", lit("Failed: IO Error"))
     except Exception as e:
-        print(f"Error writing DDL to volume: {e}. Check if Volume exists and if your permissions are correct.")
-        df = df.withColumn("status", lit("Failed writing to volume..."))
-        log_metadata_generation(df, config, full_table_name, base_path)
-
+        print(f"Unexpected error: {e}")
+        df = df.withColumn("status", lit("Failed: Unexpected error"))
+    log_metadata_generation(df, config, full_table_name, base_path)
 
 def create_folder_if_not_exists(folder_path):
     """Creates a folder if it doesn't exist.
@@ -426,25 +430,15 @@ def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
-
-def write_ddl_to_volume(file_path: str, base_path: str, ddl_statements: List[str]) -> None:
-    """
-    Writes the DDL statements to a specified file within a given base path.
-
-    Args:
-        file_path (str): The path to the file where DDL statements will be written.
-        base_path (str): The base path where the file will be created.
-        ddl_statements (List[str]): A list of DDL statements to write to the file.
-    """
+def write_ddl_to_volume(file_name, base_path, ddl_statements, output_format):
     try:
         create_folder_if_not_exists(base_path)
     except Exception as e:
         print(f"Error creating folder: {e}. Check if Volume exists and if your permissions are correct.")
-    with open(file_path, 'w') as file:
-        for row in ddl_statements:
-            print(f"Writing DDL: {row['ddl']}")
-            file.write(f"{row['ddl']}\n")
-
+    full_path = os.path.join(base_path, f"{file_name}.{output_format}")
+    with open(full_path, "w") as file:
+        for statement in ddl_statements:
+            file.write(f"{statement[0]}\n")
 
 def create_and_persist_ddl(df: DataFrame,
                            config: MetadataConfig,
@@ -465,17 +459,16 @@ def create_and_persist_ddl(df: DataFrame,
     current_date = datetime.now().strftime('%Y%m%d')
     if config.volume_name:
         base_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{current_user}/{current_date}"
-        print(f"Writing DDL for {table_name}...")
+        print(f"Writing table and column DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
         print("config_mode", f"{config.mode}")
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
-        filter_and_write_ddl('table_df', table_df, config, modified_path, table_name, current_user, current_date)
-        print(f"Writing DDL for {table_name} for columns...")
         column_df = df[f'{config.mode}_column_df']
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
-        filter_and_write_ddl('column_df', column_df, config, modified_path, table_name, current_user, current_date)
+        unioned_df = table_df.union(column_df)
+        filter_and_write_ddl(unioned_df, config, modified_path, table_name, current_user, current_date)
     else:
         print("Volume name provided as None in configuration. Not writing DDL to volume...")
         table_df = populate_log_table(df['comment_table_df'], config, current_user, base_path)
@@ -834,12 +827,13 @@ def generate_and_persist_metadata(config) -> None:
         print(f"Processing table {table}...")
         if not spark.catalog.tableExists(table):
             print(f"Table {table} does not exist. Deleting from control table and skipping...")
-            logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")
+            logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")            
             mark_as_deleted(table, config)
         else:
             df = process_and_add_ddl(config, table)
             print(f"Generating and persisting ddl for {table}...")
             create_and_persist_ddl(df, config, table)
+        
 
 
 def setup_queue(config: MetadataConfig) -> List[str]:
