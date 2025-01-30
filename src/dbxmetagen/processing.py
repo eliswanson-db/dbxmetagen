@@ -510,6 +510,8 @@ def get_generated_metadata(
         sampled_chunk = sample_df(chunk, nrows, config.sample_size)
         prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
         prompt_messages = prompt.create_prompt_template()
+        num_words = check_token_length_against_num_words(prompt_messages, config)
+        print("number of words in prompt:", num_words)
         if config.registered_model_name != "default":
             call_registered_model(config, prompt)
         else:
@@ -517,6 +519,18 @@ def get_generated_metadata(
         response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
         responses.append(response)
     return responses
+
+
+def check_token_length_against_num_words(prompt: str, config: MetadataConfig):
+    """
+    This function is not intended to catch every instance of overflowing token length, but to avoid significant overflow. Specifically, we compare the number of words in the prompt to the maximum number of tokens allowed in the model. If the number of words exceeds the maximum, an error is raised. This is potentially quite a conservative metric.
+    """
+    num_words = len(str(prompt).split())
+    if num_words > config.max_prompt_length:
+        raise ValueError(f"Number of words in prompt exceeds max_tokens. Please reduce the number of columns or increase max_tokens.")
+    else:
+        return num_words
+
 
 
 def call_registered_model(config: MetadataConfig):
@@ -819,8 +833,9 @@ def generate_and_persist_metadata(config) -> None:
     for table in config.table_names:
         print(f"Processing table {table}...")
         if not spark.catalog.tableExists(table):
-            mark_as_deleted(table, config)
+            print(f"Table {table} does not exist. Deleting from control table and skipping...")
             logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")
+            mark_as_deleted(table, config)
         else:
             df = process_and_add_ddl(config, table)
             print(f"Generating and persisting ddl for {table}...")
