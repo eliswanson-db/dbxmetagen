@@ -57,8 +57,6 @@ class Prompt(ABC):
         """
         def truncate_value(value: str, word_limit: int) -> str:
             words = value.split()
-            print("number of words!!!!!!!", len(words))
-            print("new_number_of words !?!?!!", len(words[:word_limit]))
             if len(words) > word_limit:
                 return ' '.join(words[:word_limit])
             return value
@@ -74,6 +72,7 @@ class Prompt(ABC):
             truncated_count += truncation_flags.sum()
 
         if truncated_count > 0:
+            print(f"{truncated_count} cells were truncated.")
             logger.info(f"{truncated_count} cells were truncated.")
         
         return pandas_df
