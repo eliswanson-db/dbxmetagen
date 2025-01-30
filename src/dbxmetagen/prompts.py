@@ -47,6 +47,36 @@ class Prompt(ABC):
         Add metadata to the comment input.
         """
         pass
+    
+    def calculate_cell_length(self, pandas_df) -> pd.DataFrame:
+        """
+        Calculate the length of every cell in the original DataFrame and truncate values longer than the word limit specified in the config.
+
+        Returns:
+            pd.DataFrame: Modified Pandas DataFrame with truncated values.
+        """
+        def truncate_value(value: str, word_limit: int) -> str:
+            words = value.split()
+            print("number of words!!!!!!!", len(words))
+            print("new_number_of words !?!?!!", len(words[:word_limit]))
+            if len(words) > word_limit:
+                return ' '.join(words[:word_limit])
+            return value
+
+        word_limit = getattr(self.config, 'word_limit_per_cell', 100) 
+        pandas_df = self.df.toPandas()
+        truncated_count = 0
+
+        for column in pandas_df.columns:
+            truncated_values = pandas_df[column].apply(lambda x: truncate_value(str(x), word_limit))
+            truncation_flags = pandas_df[column].apply(lambda x: len(str(x).split()) > word_limit)
+            pandas_df[column] = truncated_values
+            truncated_count += truncation_flags.sum()
+
+        if truncated_count > 0:
+            logger.info(f"{truncated_count} cells were truncated.")
+        
+        return pandas_df
 
     def filter_extended_metadata_fields(self, extended_metadata_df: DataFrame) -> DataFrame:
         """
@@ -238,9 +268,14 @@ class Prompt(ABC):
 
 class CommentPrompt(Prompt):
     def convert_to_comment_input(self) -> Dict[str, Any]:
+        pandas_df = self.df.toPandas()
+        if self.config.limit_prompt_based_on_cell_len:
+            truncated_pandas_df = self.calculate_cell_length(pandas_df)
+        else:
+            truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient='split'),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
@@ -318,9 +353,14 @@ class CommentPrompt(Prompt):
 
 class PIPrompt(Prompt):
     def convert_to_comment_input(self) -> Dict[str, Any]:
+        pandas_df = self.df.toPandas()
+        if self.config.limit_prompt_based_on_cell_len:
+            truncated_pandas_df = self.calculate_cell_length(pandas_df)
+        else:
+            truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient='split'),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
@@ -390,9 +430,14 @@ class PIPrompt(Prompt):
 
 class CommentNoDataPrompt(Prompt):
     def convert_to_comment_input(self) -> Dict[str, Any]:
+        pandas_df = self.df.toPandas()
+        if self.config.limit_prompt_based_on_cell_len:
+            truncated_pandas_df = self.calculate_cell_length(pandas_df)
+        else:
+            truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": self.df.toPandas().to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient='split'),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:

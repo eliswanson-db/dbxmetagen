@@ -52,6 +52,12 @@ variables:
   max_prompt_length:
     description: maximum prompt length
     default: 4096
+  word_limit_per_cell:
+    description: number of words for each cell of the source tables. any value from a source table larger than this will get truncated when added to prompt content.
+    default: 100
+  limit_prompt_based_on_cell_len:
+    description: whether or not to truncate cells longer than the value in word_limit_per_cell
+    default: true
   columns_per_call:
     description: columns per call - this is the number of columns sent to the prompt per chunk
     default: 5
