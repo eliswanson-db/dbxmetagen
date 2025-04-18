@@ -62,9 +62,13 @@ class TableCommentSummarizer:
                 Instructions:
 
                 1. Please focus on the description of the table. Include descriptions of the types of columns, primary keys, foreign keys, and any other information that you can think of.
-                2. Please generate between 100 and 500 words and between 1 to 3 paragraphs.
+                2. Please generate between 100 and 500 words, and 1 paragraph. But if you have significant information to include, not just guesses, add more information. The more columns the table has, the more meaningful metadata you are presented with, and if you are presented with significant information about the data in the tables, then spend more time elaborating, but if there is little to work with, then be more brief.
                 3. Please make sure you use complete sentences.
-                4. Do not include any violent, offensive, racist, or sexually explicit content."""
+                4. Do not include any violent, offensive, racist, or sexually explicit content.
+                5. Focus on generating meaningful content that is useful to users of a database table, rather than guessing or generating filler content.
+                6. Please review your response for hallucinations and duplication, and be very careful not to duplicate sentences or paragraphs, and be careful not to allow hallucinations to be provided as content.
+                7. Please use language implying certainty and facts when you have facts, and implying uncertainty when you have uncertainty.
+                """
             },
             {
                 "role": "user",
@@ -73,6 +77,5 @@ class TableCommentSummarizer:
         ]
         chat_completion = self._get_chat_completion(self.config, prompt_content, model=self.config.model, max_tokens=5000, temperature=0.7)
         print("Chat completion response...", chat_completion)
-        #response_content = self._parse_response(chat_completion.choices[0].message.content)
         response_content = chat_completion.choices[0].message.content
         return response_content

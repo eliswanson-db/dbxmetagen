@@ -9,10 +9,10 @@ While Databricks does offer [AI Generated Documentation](https://docs.databricks
 
 ### Disclaimer
 
-AI generated comments are not always accurate and comment DDLs should be reviewed prior to modifying your tables. Examples of data may appear in column names depending on settings, and if you have specific security guidelines you may need to be aware of where and how you run your code in order to maintain appropriate data security. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies and harmful content, and to check if there are concerns with PI or other data exfiltration issues through comments. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. No guarantees are made, and human review is the responsibility of the user - this is an accelerator, not a replacement for human domain knowledge.
+AI generated comments are not always accurate and comment DDLs should ALWAYS be human-reviewed. Examples of data may appear in column names depending on settings, and if you have specific security guidelines you may need to be aware of where and how you run your code in order to maintain appropriate data security. Databricks strongly recommends human review of AI-generated comments to check for inaccuracies and harmful content, and to check if there are concerns with PI or other data exfiltration issues through comments. While the model has been guided to avoids generating harmful or inappropriate descriptions, you can mitigate this risk by setting up [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) in the AI Gateway where you connect your LLM. No guarantees are made, and human review is the responsibility of the user - this is an accelerator, not a replacement for human domain knowledge.
 Unless explicitly set not to, this utility does inspect data and send it to the model endpoint specified.
 
-Requirements such as HIPAA compliance must be considered by the customer in light of their infrastructure and the model used. For example, the default PPT foundational models are not HIPAA compliant, and customers must choose an option such as a provisioned throughput endpoint or a HIPAA-compliant OpenAI external model. Compliance is the responsibility of the user.
+Requirements such as HIPAA compliance must be considered by the customer in light of their infrastructure and the model used. Compliance is the responsibility of the user.
 
 ### Solution Overview:
 There are a few key sections in this notebook:
@@ -57,9 +57,11 @@ Optional workflow:
 
 We also provide a more complex workflow that offers more options, but significantly more complexity. Please test out the simplified workflow to start. Adding full workflow for this pending.
 
+Strongly recommend reviewing all the options before using, there are a variety of useful options.
+
 ### Setup
 1. Clone the Repo into Databricks or locally
-1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster without further deployment, simply adjusting variables.yml and widgets in the notebook.
+1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster (tested on 14.3 ML LTS, 15.4 ML LTS, 16.2 ML) without further deployment, simply adjusting variables.yml and widgets in the notebook.
    1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
    1. The end result of this approach is to deploy a job. Table names can be added to the job itself for users with CAN MANAGE, or to table_names.csv as for the interactive workload.
    1. Default workflow runs both PI identification/classification and comment generation.
@@ -75,7 +77,7 @@ We also provide a more complex workflow that offers more options, but significan
 1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in variables.yml file separately, or you can use a three-level namespace for these table names.
 
 ### Configurations
-1. Most configurations that users should change are in variables.yml
+1. Most configurations that users should change are in variables.yml. There are a variety of useful options, please read the descriptions, I will not rewrite them all here.
 
 ### Current status
 1. Tested on DBR 15.4 ML LTS and 14.3 ML LTS.
@@ -91,6 +93,7 @@ We also provide a more complex workflow that offers more options, but significan
 1. Remember that PPT endpoints (the default) are not HIPAA compliant, you are responsible for setting up appropriate endpoints for your security needs.
 1. For 'pi' mode, the recommendation is to potentially use more rows of data, and smaller chunks given that scanning the data is important for identifying PI.
 
+
 ### Common Options
 1. Output a tsv file vs. a sql file to a volume - modify ddl_output_format variable.
 1. Apply DDL to source table directly vs. output DDL code - modify apply_ddl variable.
@@ -101,6 +104,8 @@ We also provide a more complex workflow that offers more options, but significan
 1. word_limit_per_cell will truncate strings in any data cells in the same if they are longer than the value provided.
 
 ### Details of comment generation and PI identification
+1. IMPORTANT: If a table is classified as PHI, treat all PII and medical information columns within as PHI, because they are by definition not just 'linkable', but fully linked. Each column is considered in isolation for the column metadata, and as such the table metadata needs to be considered when acting on the column metadata. For example, if you are masking PHI, then you should mask PII and medical information in tables classified as PHI.
+1. We do not classify 'linkable' data as PII at the column level. For example, if there is an auto-incrementing id key, we would not classify this as PII. Effectively, any joinable or foreign key in a table could be classified as linkable, and there's no way to identify all of them without more information.
 1. PI identification and classification for columns is standard, but tables are classified based on the columns in the table, not as their own entity.
    1. If any column has PII, then the table has PII.
    1. If a column has PII and another column in the same table has medical information, then the table has PHI.
@@ -109,8 +114,11 @@ We also provide a more complex workflow that offers more options, but significan
    1. If any column has PHI, then the table has PHI.
 1. Comment generation for tables is generated by applying a summarizer to the column comments.
 
+
 ### Performance Details and Skew
-1. One of the more common performance issues is that medical information is often classified as PHI in a column. Effectively, it's challenging to scan for PHI without looking at all data because in theory PHI could be present in any row, so we try to get the model to bias toward calling medical information PHI, unless it's clearly not. For example, a column called 'medical_notes' that contains long notes that are freeform should probably be classified as PHI because the potential exists that it could be. 
+1. One of the more common performance issues is that medical information is often classified as PHI in a column and vice versa. Effectively, it's challenging to scan for PHI without looking at all data because in theory PHI could be present in any row, so we try to get the model to bias toward calling medical information PHI, unless it's clearly not. For example, a column called 'medical_notes' that contains long notes that are freeform should be classified as PHI because the potential exists that it could be. 
+
+
 
 ### Under development
 1. Prompt registration and model evaluation.

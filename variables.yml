@@ -10,10 +10,13 @@ variables:
     default: __CATALOG_NAME__
   format_catalog:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
-    default: false
+    default: false 
   model:
     description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed.
     default: databricks-meta-llama-3-3-70b-instruct
+  disable_medical_information_value:
+    description: Set this to true if you want all phi assumptions to be as secure as possible. Under this setting there is no 'medical information' category. Instead, all medical information is converted to PHI. Note that this will mean that any downstream masking you do, and security concerns around your data will be much more stringent.
+    default: true
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
@@ -65,7 +68,7 @@ variables:
     description: columns per call - this is the number of columns sent to the prompt per chunk
     default: 5
   sample_size:
-    description: sample size used per chunk in the prompt generation
+    description: sample size used per chunk in the prompt generation. when set to 0, no data will be sent to LLM
     default: 5
   max_tokens:
     description: maximum tokens for model
@@ -82,6 +85,7 @@ variables:
         {
         "DBX": "Databricks",
         "WHO": "World Health Organization",
+        "GMC": "Global Marketing Code",
         }
   schema_name:
     description: Primary schema where data, models, and files are written to for this project. This is not the source schema, which is specified elsewhere with the source table name.

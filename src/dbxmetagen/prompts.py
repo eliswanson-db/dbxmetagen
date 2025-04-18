@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 import pandas as pd
 from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import collect_list, struct
+from pyspark.sql.functions import collect_list, struct, to_json
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -47,7 +47,7 @@ class Prompt(ABC):
         Add metadata to the comment input.
         """
         pass
-    
+
     def calculate_cell_length(self, pandas_df) -> pd.DataFrame:
         """
         Calculate the length of every cell in the original DataFrame and truncate values longer than the word limit specified in the config.
@@ -62,12 +62,13 @@ class Prompt(ABC):
             return value
 
         word_limit = getattr(self.config, 'word_limit_per_cell', 100) 
-        pandas_df = self.df.toPandas()
         truncated_count = 0
 
         for column in pandas_df.columns:
-            truncated_values = pandas_df[column].apply(lambda x: truncate_value(str(x), word_limit))
-            truncation_flags = pandas_df[column].apply(lambda x: len(str(x).split()) > word_limit)
+            pandas_df[column] = pandas_df[column].astype(str)
+            
+            truncated_values = pandas_df[column].apply(lambda x: truncate_value(x, word_limit))
+            truncation_flags = pandas_df[column].apply(lambda x: len(x.split()) > word_limit)
             pandas_df[column] = truncated_values
             truncated_count += truncation_flags.sum()
 
@@ -258,7 +259,9 @@ class Prompt(ABC):
         if df.isEmpty():
             return {}
         else:
-            json_response = df.toJSON().reduce(lambda x, y: x + ',' + y)
+            json_df = df.select(to_json(struct("*")).alias("json_data"))
+            json_strings = json_df.collect()
+            json_response = ",".join([row.json_data for row in json_strings])
             json_response = '[' + json_response + ']'
             logger.debug("json response in prompt: %s", json_response)
         return json_response
@@ -375,7 +378,7 @@ class PIPrompt(Prompt):
                     {"index": [0, 1], "columns": ["name", "address", "email", "MRR", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$1545.50", "2024-03-05", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$124555.32", "2023-01-03", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {{'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'MRR': {'col_name': 'MRR', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '1', 'avg_col_len': '11', 'max_col_len': '11'}, 'eap_created': {'col_name': 'eap_created', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '3', 'avg_col_len': '12', 'max_col_len': '12'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}
 
                     ###
-                    Please provide a response in this format, putting under classification either "pi" or "None", and under type either "pii", "pci", "medical_information", or "phi". Do not add additional fields.
+                    Please provide a response in this format, putting under classification either "pi", "medical_information", or "None", and under type either "pii", "pci", "medical_information", "phi", or "all". All should only be used if a field contains both PHI and PCI. Do not add additional fields.
                     ###
 
                     {"table": "pi", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98]}
@@ -385,10 +388,12 @@ class PIPrompt(Prompt):
                     Specific Considerations
                     1. pi and pii are synonyms for our purposes, and not used as a legal term but as a way to distinguish individuals from one another.
                     2. Please don't respond with anything other than the dictionary.
-                    3. Attempt to classify into None, PII, PCI, medical information, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. Medical Information: This includes any infromation in a medical record that cannot be used to identify an individual. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
-                    4. When health or medical information is not linked to any identifiers, it's not considered PHI under HIPAA, it is considered medical infrormation. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a column or table that has both medical information and patient names is considered PHI.
-                    5. The value for classification should always be either "pi" or "None". The value for type should always be either "pii", "pci", "medical_information", or "phi".
+                    3. Attempt to classify into None, PII, PCI, medical information, and PHI based on common definitions. If definitions are provided in the content then use them. Otherwise, assume that PII is Personally Identifiable Information, PHI is Protected Health Information, and PCI is Protected Confidential Information. PII: This includes any data that could potentially identify a specific individual. Medical Information: This includes any infromation in a medical record that cannot be used to identify an individual. Medical information is not PI, but combined with PII becomes PHI. PHI: This includes any information in a medical record that can be used to identify an individual and that was created, used, or disclosed in the course of providing a health care service such as diagnosis or treatment. PCI: Payment Card Industry Information, including the primary account number (PAN) typically found on the front of the card, the card's security code, full track data stored in the card's chip or magnetic stripe, cardholder PIN, cardholder name, or card expiration date.
+                    4. When health or medical information is not linked to any identifiers, it's not PI or PII, nor is it considered PHI under HIPAA. It only becomes PHI when it's combined with personally identifiable information in a way that could reasonably identify an individual. Thus, a column with a diagnosis is not PHI unless there are also patient names or other PII in the column as well, but a column or table that has both medical information and patient names is considered PHI.
+                    5. The value for classification should always be either "pi", "medical_information", or "None". The value for type should always be either "pii", "pci", "medical_information", or "phi". When type is pii, pci, or phi, classification should be None. When type is None, classification should be None, and when type is medical information, classification should be medical_information.
                     6. Any freeform medical information should be considered PHI, because it's not possible to guarantee it has no personal information. For example, "medical_notes", "chart_information", "doctor_notes".
+                    7. Always prioritize the more secure type of data. For example, if the decision between PII and PHI is unclear, PHI should be chosen. If the decision between medical information and PHI is unclear, PHI should be chosen should be chosen.
+                    8. The medical information type should only be used in the scenario where the data has clearly been de-identified or contains something like medication from a picklist - e.g. "diabetes", "ibuprofen". Anytime you may have personally identifying information in connection to healthcare data, use PHI.
 
                     ###
                     """
@@ -413,11 +418,11 @@ class PIPrompt(Prompt):
                 },
                 {
                     "role": "user",
-                    "content": """{"index": [0, 1], "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "data": [["Jane Doe", "P12345", "Diabetes", "10 mg Insulin twice/day", "Ms. Doe is responding well to treatment", "2023-06-15"], ["John Smith", "P67890", "Hypertension", "Medication", "John's blood pressure is under control", "2023-06-16"]], "column_metadata": {'patient_name': {'col_name': 'patient_name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'patient_id': {'col_name': 'patient_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '6', 'max_col_len': '6'}, 'diagnosis': {'col_name': 'diagnosis', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'treatment': {'col_name': 'treatment', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'doctor_notes': {'col_name': 'doctor_notes', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '30', 'max_col_len': '30'}, 'appointment_date': {'col_name': 'appointment_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}}}"""
+                    "content": """{"index": [0, 1], "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "data": [["Jane Doe", "P12345", "Diabetes", "10 mg Insulin BID", "Ms. Doe is responding well to treatment", "2023-06-15"], ["John Smith", "P67890", "Hypertension", "Medicate patient P12345 and recommend exercise.", "John's blood pressure is under control", "2023-06-16"]], "column_metadata": {'patient_name': {'col_name': 'patient_name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'patient_id': {'col_name': 'patient_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '6', 'max_col_len': '6'}, 'diagnosis': {'col_name': 'diagnosis', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'treatment': {'col_name': 'treatment', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'doctor_notes': {'col_name': 'doctor_notes', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '30', 'max_col_len': '30'}, 'appointment_date': {'col_name': 'appointment_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}}}"""
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "phi", "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "medical_information", "confidence": 0.9}, {"classification": "pi", "type": "medical_information", "confidence": 0.7}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "medical_information", "confidence": 0.7}]}"""
+                    "content": """{"table": "phi", "columns": ["patient_name", "patient_id", "diagnosis", "treatment_plan", "doctor_notes", "appointment_date"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "medical_information", "type": "medical_information", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}]}"""
                 },
                 {
                     "role": "user",
