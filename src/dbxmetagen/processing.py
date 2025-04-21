@@ -912,7 +912,6 @@ def summarize_table_content(table_df, config, table_name):
         summarizer = TableCommentSummarizer(config, table_df)
         summary = summarizer.summarize_comments(table_name)
         summary_df = table_df.limit(1).withColumn("column_content", lit(summary))
-        summary_df.write.saveAsTable(f"{config.catalog_name}.{config.schema_name}.summary_test")
         return summary_df
     elif table_df.count() == 1:
         return table_df
