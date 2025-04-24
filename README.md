@@ -59,6 +59,12 @@ We also provide a more complex workflow that offers more options, but significan
 
 Strongly recommend reviewing all the options before using, there are a variety of useful options.
 
+### Minimal Setup
+Clone the repo into Databricks to a Git Folder.
+In variables.yml, update the host, the catalog_name, and if needed the apply_ddl setting if you want it to add the comments or PI definitions directly to a table.
+Set the widget for comment or pi and run the notebook.
+Update notebooks/table_names.csv
+
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster (tested on 14.3 ML LTS, 15.4 ML LTS, 16.2 ML) without further deployment, simply adjusting variables.yml and widgets in the notebook.
