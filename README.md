@@ -60,10 +60,10 @@ We also provide a more complex workflow that offers more options, but significan
 Strongly recommend reviewing all the options before using, there are a variety of useful options.
 
 ### Minimal Setup
-Clone the repo into Databricks to a Git Folder.
-In variables.yml, update the host, the catalog_name, and if needed the apply_ddl setting if you want it to add the comments or PI definitions directly to a table.
-Set the widget for comment or pi and run the notebook.
-Update notebooks/table_names.csv
+1. Clone the repo into Databricks to a Git Folder.
+1. In variables.yml, update the host, the catalog_name, and if needed the apply_ddl setting if you want it to add the comments or PI definitions directly to a table.
+1. Set the widget for comment or pi and run the notebook.
+1. Update notebooks/table_names.csv
 
 ### Setup
 1. Clone the Repo into Databricks or locally
