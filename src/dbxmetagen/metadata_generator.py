@@ -3,41 +3,39 @@ from abc import ABC, abstractmethod
 import json
 from pyspark.sql import SparkSession
 from pydantic import ValidationError
-from typing import Dict, Tuple
+from typing import Tuple, Dict, List, Any
 from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
 import mlflow
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
-from pydantic.types import List, Any
+#from pydantic.types import List, Any, Dict as PydanticDict
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
-
+from databricks_langchain import ChatDatabricks
 
 
 class Response(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     table: str
     columns: List[str]
 
+class PIColumnContent(BaseModel):
+    classification: str
+    type: str
+    confidence: float
 
 class PIResponse(Response):
     model_config = ConfigDict(extra="forbid")
-
-    column_contents: list[dict[str, Any]]
-
+    column_contents: List[PIColumnContent]
 
 class CommentResponse(Response):
     model_config = ConfigDict(extra="forbid")
-
     column_contents: list[str]
-
 
 class SummaryCommentResponse(Response):
     pass
-
 
 class MetadataGenerator(ABC):
     @property
@@ -67,12 +65,12 @@ class CommentGenerator(MetadataGenerator):
         return comment_response, message_payload
 
     def predict_chat_response(self, prompt_content):
-        self.chat_response = self.openai_client.chat.completions.create(
-            messages=prompt_content,
-            model=self.config.model,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature
-        )
+        self.chat_response = ChatDatabricks(
+            endpoint=self.config.model,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens
+        ).with_structured_output(CommentResponse).invoke(prompt_content)
+        print("IMMEDIATE CHAT RESPONSE", self.chat_response)
         return self.chat_response
 
     def get_comment_response(self,
@@ -85,11 +83,8 @@ class CommentGenerator(MetadataGenerator):
                              retries: int = 0,
                              max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
         try:
-            chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
-            response_payload = chat_completion.choices[0].message
-            response_dict = self._parse_response(response_payload.content)
-            self._validate_response(content, response_dict)
-            chat_response = CommentResponse(**response_dict)
+            chat_response = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+            response_payload = None
             return chat_response, response_payload
         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
             if retries < max_retries:
@@ -141,10 +136,10 @@ class CommentGenerator(MetadataGenerator):
 
 
 class PIIdentifier(MetadataGenerator):
-    def get_responses(self, config, prompt, prompt_content) -> Tuple[CommentResponse, ChatCompletion]:
+    def get_responses(self, config, prompt, prompt_content) -> Tuple[PIResponse, ChatCompletion]:
         if len(prompt) > self.config.max_prompt_length:
             raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
-        comment_response, message_payload = self.get_comment_response(
+        comment_response, message_payload = self.get_pi_response(
             self.config,
             content=prompt_content,
             prompt_content=prompt[self.config.mode],
@@ -153,17 +148,19 @@ class PIIdentifier(MetadataGenerator):
             temperature=self.config.temperature
         )
         return comment_response, message_payload
-
+    
     def predict_chat_response(self, prompt_content):
-        self.chat_response = self.openai_client.chat.completions.create(
-            messages=prompt_content,
-            model=self.config.model,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature
-        )
+        try:
+            self.chat_response = ChatDatabricks(
+                endpoint=self.config.model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+                ).with_structured_output(PIResponse).invoke(prompt_content)
+        except:
+            print("Validation error - response \n\n\n response")
         return self.chat_response
 
-    def get_comment_response(self,
+    def get_pi_response(self,
                              config: MetadataConfig,
                              content: str,
                              prompt_content: str,
@@ -171,13 +168,10 @@ class PIIdentifier(MetadataGenerator):
                              max_tokens: int,
                              temperature: float,
                              retries: int = 0,
-                             max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
+                             max_retries: int = 5) -> Tuple[PIResponse, Dict[str, Any]]:
         try:
-            chat_completion = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
-            response_payload = chat_completion.choices[0].message
-            response_dict = self._parse_response(response_payload.content)
-            self._validate_response(content, response_dict)
-            chat_response = PIResponse(**response_dict)
+            chat_response = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+            response_payload = None
             return chat_response, response_payload
         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
             if retries < max_retries:

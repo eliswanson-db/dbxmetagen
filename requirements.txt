@@ -3,3 +3,5 @@ openai==1.56.1
 cloudpickle==3.1.0
 pydantic==2.9.2
 ydata-profiling==4.12.1
+databricks-langchain 
+langchain-community

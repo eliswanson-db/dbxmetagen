@@ -80,24 +80,52 @@ class Prompt(ABC):
 
     def filter_extended_metadata_fields(self, extended_metadata_df: DataFrame) -> DataFrame:
         """
-        Filter extended metadata fields based on the mode.
-
+        Filter extended metadata fields based on the current configuration mode.
+        
+        In 'pi' mode: Filters out NULL info_values
+        In 'comment' mode: Filters NULL values, descriptions, comments, and optionally data_type
+        
         Args:
-            extended_metadata_df (DataFrame): DataFrame containing extended metadata.
-
+            extended_metadata_df: DataFrame containing extended metadata
+            
         Returns:
-            DataFrame: Filtered DataFrame.
+            Filtered DataFrame
+            
+        Raises:
+            ValueError: For invalid mode configuration
         """
-        if self.config.mode == "pi":
-            return extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")
-        elif self.config.mode == "comment":
-            return extended_metadata_df.filter(
-                (extended_metadata_df["info_value"] != "NULL") &
-                (extended_metadata_df["info_name"] != "description") &
-                (extended_metadata_df["info_name"] != "comment")
-            )
-        else:
-            raise ValueError("Invalid mode provided. Please provide either 'pi' or 'comment'.")
+        mode_handlers = {
+            "pi": self._filter_pi_mode,
+            "comment": self._filter_comment_mode
+        }
+        
+        handler = mode_handlers.get(self.config.mode)
+        if not handler:
+            raise ValueError("Invalid mode provided. Please use either 'pi' or 'comment'")
+        
+        return handler(extended_metadata_df)
+
+    def _filter_pi_mode(self, df: DataFrame) -> DataFrame:
+        """Filter metadata for PI mode (remove NULL values)"""
+        return df.filter(df["info_value"] != "NULL")
+
+    def _filter_comment_mode(self, df: DataFrame) -> DataFrame:
+        """Filter metadata for comment mode with additional exclusions"""
+        filtered_df = df.filter(
+            (df["info_value"] != "NULL") &
+            ~df["info_name"].isin(["description", "comment"])
+        )
+        
+        if not self.config.include_datatype_from_metadata:
+            print(f"Include datatype from metadata: {self.config.include_datatype_from_metadata}")
+            filtered_df = filtered_df.filter(df["info_name"] != "data_type")
+
+        if not self.config.include_possible_data_fields_in_metadata:
+            print(f"Include possible data fields from metadata: {self.config.include_possible_data_fields_in_metadata}")
+            filtered_df = filtered_df.filter(~df["info_name"].isin(["min", "max"]))
+        
+        return filtered_df
+
 
     def add_metadata_to_comment_input(self) -> None:
         """
@@ -123,6 +151,7 @@ class Prompt(ABC):
             filtered_metadata_df = self.filter_extended_metadata_fields(extended_metadata_df)
             column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
             combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
+            print("combined metadata \n\n\n\n\n", combined_metadata)
             combined_metadata = self.add_column_metadata_to_column_contents(column_name, combined_metadata)
             column_metadata_dict[column_name] = combined_metadata
         return column_metadata_dict
@@ -314,6 +343,7 @@ class CommentPrompt(Prompt):
                     6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
                     7. Column contents will only represent a subset of data in the table so please provide information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample.
                     8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
+                    9. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
 
                     ###
                     Please generate a description for the table and columns in the following string.
@@ -394,6 +424,7 @@ class PIPrompt(Prompt):
                     6. Any freeform medical information should be considered PHI, because it's not possible to guarantee it has no personal information. For example, "medical_notes", "chart_information", "doctor_notes".
                     7. Always prioritize the more secure type of data. For example, if the decision between PII and PHI is unclear, PHI should be chosen. If the decision between medical information and PHI is unclear, PHI should be chosen should be chosen.
                     8. The medical information type should only be used in the scenario where the data has clearly been de-identified or contains something like medication from a picklist - e.g. "diabetes", "ibuprofen". Anytime you may have personally identifying information in connection to healthcare data, use PHI.
+                    9. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
 
                     ###
                     """
@@ -453,7 +484,7 @@ class CommentNoDataPrompt(Prompt):
               [
                 {
                     "role": "system",
-                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions.
+                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions. It doesn't matter if data are coming from data pulls or from stored metadata, do not include any data in your outputs.
 
 
                     ###
@@ -478,7 +509,8 @@ class CommentNoDataPrompt(Prompt):
                     6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
                     7. Column contents will only represent a subset of data in the table so please provide aggregated information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample. Do not provide any actual data in the comment.
                     8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
-                    9. Do not provide any actual data in the comment.
+                    9. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
+                    10. Do not provide any actual data in the comment.
 
                     ###
                     Please generate a description for the table and columns in the following string.
@@ -521,7 +553,10 @@ class CommentNoDataPrompt(Prompt):
 class PromptFactory:
     @staticmethod
     def create_prompt(config, df, full_table_name) -> Prompt:
-        if config.mode == "comment" and config.allow_data:
+        print("Config allows data", config.allow_data)
+        if config.allow_data:
+            print("allow data is truthy")
+        if config.mode == "comment" and config.allow_data_in_comments:
             return CommentPrompt(config, df, full_table_name)
         elif config.mode == "comment":
             return CommentNoDataPrompt(config, df, full_table_name)

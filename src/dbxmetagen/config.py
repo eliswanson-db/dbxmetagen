@@ -5,7 +5,40 @@ class MetadataConfig:
         }
     SETUP_PARAMS = {
         "yaml_file_path": "../variables.yml",
-        "yaml_variable_names": ['host', 'catalog_name', 'schema_name', 'catalog_tokenizable', 'disable_medical_information_value', 'format_catalog', 'model', 'registered_model_name', 'model_type', 'volume_name', 'table_names_source', 'source_file_path', 'control_table', 'apply_ddl', 'ddl_output_format', 'allow_data', 'dry_run', 'pi_classification_rules', 'allow_manual_override', 'override_csv_path', 'tag_none_fields', 'pi_column_field_names', 'max_prompt_length', 'columns_per_call', 'sample_size', 'max_tokens', 'word_limit_per_cell', 'limit_prompt_based_on_cell_len', 'temperature', 'add_metadata', 'acro_content']    
+        "yaml_variable_names": ['host', 
+                                'catalog_name', 
+                                'schema_name', 
+                                'catalog_tokenizable', 
+                                'disable_medical_information_value', 
+                                'format_catalog', 
+                                'model', 
+                                'registered_model_name', 
+                                'model_type', 
+                                'volume_name', 
+                                'table_names_source', 
+                                'source_file_path', 
+                                'control_table', 
+                                'apply_ddl', 
+                                'ddl_output_format', 
+                                'allow_data', 
+                                'dry_run', 
+                                'pi_classification_rules', 
+                                'allow_manual_override', 
+                                'override_csv_path', 
+                                'tag_none_fields', 
+                                'pi_column_field_names', 
+                                'max_prompt_length', 
+                                'columns_per_call', 
+                                'sample_size', 
+                                'max_tokens', 
+                                'word_limit_per_cell', 
+                                'limit_prompt_based_on_cell_len', 
+                                'temperature', 
+                                'add_metadata', 
+                                'acro_content', 
+                                'allow_data_in_comments', 
+                                'include_datatype_from_metadata',
+                                'include_possible_data_fields_in_metadata']    
     }
     MODEL_PARAMS = {
     }
@@ -31,6 +64,12 @@ class MetadataConfig:
             setattr(self, key, value)
 
         self.instantiate_environments()
+
+        if not self.allow_data:
+            self.allow_data_in_comments = False
+            self.sample_size = 0
+            self.filter_data_from_metadata = True
+            self.include_possible_data_fields_in_metadata = False
 
         print(self.current_user)
 

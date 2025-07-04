@@ -28,5 +28,5 @@ def main(kwargs):
     config.table_names = list(set(config.table_names).union(set(queue)))
     print("Running generate on...", config.table_names)
     generate_and_persist_metadata(config)
-    #sanitized_current_user = sanitize_email(config.current_user)
-    spark.sql(f"""DROP TABLE {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_email(config.current_user)}""")
+    spark.sql(f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_email(config.current_user)}""")
+    

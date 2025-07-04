@@ -5,6 +5,27 @@ variables:
   host:
     description: Base url host variable. If using asset bundles, will get overridden by target host. Otherwise, use the host here that you want to target.
     default: https://adb-830292400663869.9.azuredatabricks.net/
+  allow_data:
+    description: Set this to false if you do not want data sent to LLMs, do not want any metadata stored in comments, and do not want metadata used that could leak data into metadata. Reduces quality of outputs. Internally sets sample_size to 0, allow_data_in_comments to false, and include_possible_data_fields_in_metadata to false.
+    default: true
+  sample_size:
+    description: Sample size used per chunk in the prompt generation. when set to 0, no data will be sent to LLM, but due to leakage from metadata if this field alone is set, does not prevent data being added to comments.
+    default: 2
+  disable_medical_information_value:
+    description: Set this to true if you want all phi assumptions to be as secure as possible. Under this setting there is no 'medical information' category. Instead, all medical information is converted to PHI. Note that this will mean that any downstream masking you do, and security concerns around your data will be much more stringent.
+    default: true
+  allow_data_in_comments:
+    description: Whether to allow data in comments. Note that this does not prevent data from being used in the inputs, but is meant to keep data from the outputs. This is not 100% fool-proof, for example sometimes there is leakage from the metadata. 
+    default: true
+  add_metadata:
+    description: Whether to use metadata from information schema and from a DESCRIBE EXTENDED ... COMPUTE STATISTICS... on each column or not. The most information will be used if ANALYZE ALL COLUMNS ... COMPUTE STATISTICS... is run on the table, but there are good reasons not to do that, please review the considerations. Setting add_metadata to true will also lead to a slower process. Note that some metadata can in theory leak data, such as min or max. Strings don't have values for min or max, but dates, floats, and integers do.
+    default: true
+  include_datatype_from_metadata:
+    description: Should datatype be included in the comment generation?
+    default: false
+  include_possible_data_fields_in_metadata:
+    description: There are a few fields in extended metadata if ANALYZE TABLE...COMPUTE STATISTICS... is used that in theory could leak PII or PHI. For example, if a phone number or SSN is stored as an INT, or for appointment dates that could be classified as PHI. Set this to false if you want to exclude these fields. Note that these fields are some of the most useful for tools like Genie.
+    default: true
   catalog_tokenizable:
     description: tokenizable catalog name. You can add string formatting here for environment. For example, add _{env} so that config.env from widgets or from the asset bundle variables gets parameterized with the catalog name. Paired with format_catalog and making sure that there's a value in the instantiated config for the parameterized value, the token can be formatted in Databricks. If the token itself should be present in the DDL generated, then leave format_catalog as false.
     default: __CATALOG_NAME__
@@ -12,23 +33,17 @@ variables:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
     default: false 
   model:
-    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed.
+    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, or databricks-meta-llama-3-3-70b-instruct. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision.
     default: databricks-meta-llama-3-3-70b-instruct
-  disable_medical_information_value:
-    description: Set this to true if you want all phi assumptions to be as secure as possible. Under this setting there is no 'medical information' category. Instead, all medical information is converted to PHI. Note that this will mean that any downstream masking you do, and security concerns around your data will be much more stringent.
-    default: true
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
-    default: false
+    default: true
   ddl_output_format:
     description: Output format can be via SQL file (default) or via TSV if this improves reviewability.
     default: sql
-  allow_data:
-    description: Whether to allow data in comments. Note that this does not prevent data from being used in the inputs, but is meant to keep data from the outputs.
-    default: true
   pi_classification_rules:
     description: Rules for PI classification. These rules will be injected into the prompt and provided along with the prompt to the model.
     default: |
@@ -67,18 +82,12 @@ variables:
   columns_per_call:
     description: columns per call - this is the number of columns sent to the prompt per chunk
     default: 5
-  sample_size:
-    description: sample size used per chunk in the prompt generation. when set to 0, no data will be sent to LLM
-    default: 5
   max_tokens:
     description: maximum tokens for model
     default: 4096
   temperature:
     description: temperature applied to the model
     default: 0.1
-  add_metadata:
-    description: Whether to use metadata from information schema and from a DESCRIBE EXTENDED on each column or not. The most information will be used if ANALYZE ALL COLUMNS is run on the table. Setting add_metadata to true will also lead to a slower process.
-    default: true
   acro_content:
     description: acronyms that are commonly used in the data
     default: |

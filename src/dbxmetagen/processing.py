@@ -33,7 +33,7 @@ from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactor
 from src.dbxmetagen.error_handling import exponential_backoff, validate_csv
 from src.dbxmetagen.comment_summarizer import TableCommentSummarizer
 from src.dbxmetagen.metadata_generator import (
-    Response, PIResponse, CommentResponse, MetadataGeneratorFactory, 
+    Response, PIResponse, CommentResponse, PIColumnContent, MetadataGeneratorFactory, 
     PIIdentifier, MetadataGenerator, CommentGenerator
 )
 from src.dbxmetagen.overrides import (override_metadata_from_csv, apply_overrides_with_loop, 
@@ -64,18 +64,6 @@ class Input(BaseModel):
             "column_contents": cls.df.toPandas().to_dict(orient='list')
         }
 
-class PInput(Input):
-    ### Currently not implemented.
-
-    column_contents: List[Dict[str, Any]]
-
-
-class CommentInput(Input):
-    ### Currently not implemented.
-
-    column_contents: List[List[Any]]
-
-
 def tag_table(table_name: str, tags: Dict[str, str]) -> None:
     """
     Tags a table with the provided tags.
@@ -102,8 +90,10 @@ def write_to_log_table(log_data: Dict[str, Any], log_table_name: str) -> None:
     log_df.write.format("delta").option("mergeSchema", "true").mode("append").saveAsTable(log_table_name)
 
 
-
-def count_df_columns(df):
+def count_df_columns(df: DataFrame) -> int:
+    """
+    Count the number of columns in a spark dataframe and return.
+    """
     return len(df.columns)
 
 
@@ -212,7 +202,9 @@ def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name:
     print("zip of columns and column contents", zip(response.columns, response.column_contents))
 
     for column_name, column_content in zip(response.columns, response.column_contents):
-        if isinstance(column_content, dict) and config.mode == "pi":
+        if (isinstance(column_content, dict) or isinstance(column_content, PIColumnContent)) and config.mode == "pi":
+            if isinstance(column_content, PIColumnContent):
+                column_content = column_content.model_dump()
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,
@@ -504,7 +496,7 @@ def output_df_pandas_to_tsv(df, output_file):
 
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:
     run_log_table_ddl(config)
-    print("df schema in log metadata generation", df.schema)
+    #print("df schema in log metadata generation", df.schema)
     df.write.mode('append').option("mergeSchema", "true").saveAsTable(f"{config.catalog_name}.{config.schema_name}.{config.mode}_metadata_generation_log")
     mark_as_deleted(table_name, config)
 
@@ -621,11 +613,11 @@ def create_and_persist_ddl(df: DataFrame,
         print(f"Writing table and column DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
         print("config_mode", f"{config.mode}")
-        print("Populate log schema for table", table_df.schema)
+        #print("Populate log schema for table", table_df.schema)
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         column_df = df[f'{config.mode}_column_df']
-        print("Populate log schema for table", table_df.schema)
+        #print("Populate log schema for table", table_df.schema)
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         unioned_df = table_df.union(column_df)
@@ -678,6 +670,7 @@ def get_generated_metadata_data_aware(spark: SparkSession, config: MetadataConfi
         else:
             chat_response = MetadataGeneratorFactory.create_generator(config)
         response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
+        print("Response is HERE \n\n\n", response)
         responses.append(response)
     return responses
 
@@ -1014,15 +1007,23 @@ def generate_and_persist_metadata(config) -> None:
     spark = SparkSession.builder.getOrCreate()
     for table in config.table_names:
         print(f"Processing table {table}...")
-        if not spark.catalog.tableExists(table):
-            print(f"Table {table} does not exist. Deleting from control table and skipping...")
-            logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")            
-            mark_as_deleted(table, config)
-        else:
-            df = process_and_add_ddl(config, table)
-            print(f"Generating and persisting ddl for {table}...")
-            create_and_persist_ddl(df, config, table)
-        
+        log_dict = {}
+        try:
+            if not spark.catalog.tableExists(table):
+                print(f"Table {table} does not exist. Deleting from control table and skipping...")
+                logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")            
+                mark_as_deleted(table, config)
+                log_dict = {"full_table_name": f"{table}", "status": "Table does not exist", "_updated_at": str(datetime.now())}
+            else:
+                df = process_and_add_ddl(config, table)
+                print(f"Generating and persisting ddl for {table}...")
+                create_and_persist_ddl(df, config, table)
+                log_dict = {"full_table_name": f"{table}", "status": "Table processed", "_updated_at": str(datetime.now())}
+        except:
+            log_dict = {"full_table_name": f"{table}", "status": "Table processing failed", "_updated_at": str(datetime.now())}
+        finally:
+            write_to_log_table(log_dict, f"{config.catalog_name}.{config.schema_name}.table_processing_log")
+            print(f"Finished processing table and writing to log table...")
 
 
 def setup_queue(config: MetadataConfig) -> List[str]:
@@ -1170,7 +1171,7 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{comment}";"""
+    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS '{comment}';"""
     return ddl_statement
 
 
