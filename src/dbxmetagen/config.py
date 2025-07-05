@@ -38,7 +38,9 @@ class MetadataConfig:
                                 'acro_content', 
                                 'allow_data_in_comments', 
                                 'include_datatype_from_metadata',
-                                'include_possible_data_fields_in_metadata']    
+                                'include_possible_data_fields_in_metadata',
+                                'review_input_file_type',
+                                'review_output_file_type']    
     }
     MODEL_PARAMS = {
     }

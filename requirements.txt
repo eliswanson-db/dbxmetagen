@@ -5,3 +5,4 @@ pydantic==2.9.2
 ydata-profiling==4.12.1
 databricks-langchain 
 langchain-community
+openpyxl==3.1.5

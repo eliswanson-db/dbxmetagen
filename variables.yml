@@ -129,3 +129,12 @@ variables:
   pi_column_field_names:
     description: Field names for PI columns. Not yet implemented. Will allow name changes and alternate schemas for tag names. Currently, the code must be changed.
     default: default
+  review_input_file_type:
+    description: excel or tsv. allows reviewed DDL to be in either format.
+    default: tsv
+  review_output_file_type:
+    description: sql, excel, or tsv. allows reviewed DDL to be exported in either format.
+    default: excel
+  review_apply_ddl:
+    description: When running 'sync_reviewed_ddl', if this is set to true, the DDL will all be applied after running.
+    default: false

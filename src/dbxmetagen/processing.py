@@ -810,12 +810,9 @@ def split_name_for_df(df):
 def add_ddl_to_dfs(config, table_df, column_df, table_name):
     dfs = {}
     if config.mode == "comment":
-        print("tbale df comment from add ddl to dfs", table_df.schema)
         summarized_table_df = summarize_table_content(table_df, config, table_name)
         summarized_table_df = split_name_for_df(summarized_table_df)
-        print("summarized table df comment from add ddl to dfs", summarized_table_df.schema)
         dfs['comment_table_df'] = add_ddl_to_table_comment_df(summarized_table_df, "ddl")
-        print("column df comment from add ddl to dfs", column_df.schema)
         dfs['comment_column_df'] = add_ddl_to_column_comment_df(column_df, "ddl")
         if config.apply_ddl:
             apply_ddl_to_tables(dfs, config)
@@ -1009,20 +1006,28 @@ def generate_and_persist_metadata(config) -> None:
         print(f"Processing table {table}...")
         log_dict = {}
         try:
+            print("1")
             if not spark.catalog.tableExists(table):
                 print(f"Table {table} does not exist. Deleting from control table and skipping...")
                 logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")            
                 mark_as_deleted(table, config)
                 log_dict = {"full_table_name": f"{table}", "status": "Table does not exist", "_updated_at": str(datetime.now())}
+                print("2")
             else:
+                print("3")
                 df = process_and_add_ddl(config, table)
                 print(f"Generating and persisting ddl for {table}...")
                 create_and_persist_ddl(df, config, table)
                 log_dict = {"full_table_name": f"{table}", "status": "Table processed", "_updated_at": str(datetime.now())}
+                print("4")
         except:
+            print("5")
             log_dict = {"full_table_name": f"{table}", "status": "Table processing failed", "_updated_at": str(datetime.now())}
+            print("6")
         finally:
+            print("7")
             write_to_log_table(log_dict, f"{config.catalog_name}.{config.schema_name}.table_processing_log")
+            print("8")
             print(f"Finished processing table and writing to log table...")
 
 

@@ -8,7 +8,7 @@
 # MAGIC #`dbxmetagen` Overview
 # MAGIC ### This is a utility to help generate high quality descriptions for tables and columns to enhance enterprise search and data governance, identify and classify PI, improve Databricks Genie performance for Text-2-SQL, and generally help curate a high quality metadata layer and data dictionary for enterprise data.
 # MAGIC
-# MAGIC While Databricks does offer high quality [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), and PI identification, these are not sustainable at scale, customizable to customers' needs or integrable into various CICD loops without additional effort. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. Eventually Databricks utilities will undoubtedly be more flexible, but this solution accelerator can allow customers to close the gap in a customizable fashion until then.
+# MAGIC While Databricks does offer high quality [AI Generated Documentation](https://docs.databricks.com/en/comments/ai-comments.html), and PI identification, these are not sustainable at scale, customizable to customers' needs or integrable into various CICD loops without additional effort. Prompts are not adjustable by customers, and there are a variety of customization options that customers have asked for. This utility, `dbxmetagen`, helps generate table and column descriptions at scale. Eventually Databricks utilities will undoubtedly be more flexible, but this solution accelerator can allow customers to close the gap in a customizable fashion until then.
 # MAGIC
 # MAGIC Please review the readme for full details and documentation.
 # MAGIC
@@ -52,7 +52,7 @@ from src.dbxmetagen.main import main
 
 # COMMAND ----------
 
-dbutils.widgets.dropdown("mode", "pi", ["comment", "pi"])
+dbutils.widgets.dropdown("mode", "comment", ["comment", "pi"])
 dbutils.widgets.text("env", "")
 dbutils.widgets.text("table_names", "")
 

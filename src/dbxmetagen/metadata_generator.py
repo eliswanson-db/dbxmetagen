@@ -9,7 +9,6 @@ import mlflow
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
-#from pydantic.types import List, Any, Dict as PydanticDict
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
@@ -70,7 +69,6 @@ class CommentGenerator(MetadataGenerator):
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens
         ).with_structured_output(CommentResponse).invoke(prompt_content)
-        print("IMMEDIATE CHAT RESPONSE", self.chat_response)
         return self.chat_response
 
     def get_comment_response(self,
