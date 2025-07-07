@@ -1,4 +1,6 @@
 import yaml
+import uuid
+from datetime import datetime
 
 class MetadataConfig:
     ACRO_CONTENT = {
@@ -40,17 +42,19 @@ class MetadataConfig:
                                 'include_datatype_from_metadata',
                                 'include_possible_data_fields_in_metadata',
                                 'review_input_file_type',
-                                'review_output_file_type']    
+                                'review_output_file_type',
+                                'include_deterministic_pi',
+                                'reviewable_output_format',
+                                'spacy_model_names']    
     }
     MODEL_PARAMS = {
     }
 
     def __init__(self, **kwargs):
-        print(kwargs)
         self.setup_params = self.__class__.SETUP_PARAMS
         self.model_params = self.__class__.MODEL_PARAMS
-        self.log_timestamp = None
-
+        self.log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_id = uuid.uuid4()
 
         for key, value in self.setup_params.items():
             setattr(self, key, value)

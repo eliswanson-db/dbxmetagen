@@ -15,9 +15,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# TODO: Fix date foldername
 # TODO: Allow excel outputs for original file
 # TODO: Comment is not actually being overridden by old comment. Need to get the override to actually work.
+# TODO: Add structured output for summarizer?
+# TODO: Review summarizer prompt
+# TODO: Fix exportable run logs only exporting one table
+# TODO: We really should error if something goes wrong, it just keeps running now and there's no clear error.
 
 def ensure_directory_exists(path: str) -> None:
     """
@@ -112,11 +115,14 @@ def update_ddl_row(row: pd.Series) -> str:
     """
     Update a single row's DDL based on classification/type or column_content.
     """
+    display(row)
     if pd.isna(row.get('ddl')):
         return row.get('ddl')
     if pd.notna(row.get('classification')) and pd.notna(row.get('type')):
         return replace_pii_tags_in_ddl(row['ddl'], row['classification'], row['type'])
     if pd.notna(row.get('column_content')):
+        print("column content", row.get('column_content'))
+        print("ddl", row.get('ddl'))
         return replace_comment_in_ddl(row['ddl'], row['column_content'])
     return row['ddl']
 
@@ -218,7 +224,7 @@ def process_metadata_file(
     """
     try:
         sanitized_email = sanitize_email(config.current_user)
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        current_date = datetime.now().strftime("%Y%m%d")
         input_dir = output_dir = os.path.join(
             "/Volumes", config.catalog_name, config.schema_name,
             "generated_metadata", sanitized_email, "reviewed_outputs"

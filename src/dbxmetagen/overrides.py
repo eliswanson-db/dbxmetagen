@@ -21,11 +21,10 @@ def override_metadata_from_csv(df: DataFrame, csv_path: str, config: MetadataCon
     csv_df = pd.read_csv(csv_path)
     csv_df = csv_df.where(pd.notna(csv_df), None)
     csv_dict = csv_df.to_dict('records')
-    print("csv_dict in overrides", csv_dict)
     spark = SparkSession.builder.getOrCreate()
     csv_spark_df = spark.createDataFrame(csv_df)
     nrows = csv_spark_df.count()
-    print("nrows", nrows)
+    print("Number of rows being overridden...", nrows)
 
     if nrows == 0:
         return df
@@ -33,7 +32,6 @@ def override_metadata_from_csv(df: DataFrame, csv_path: str, config: MetadataCon
         df = apply_overrides_with_loop(df, csv_dict, config)
     else:
         raise ValueError("CSV file is too large. Please implement a more efficient method for large datasets.")
-        #df = apply_overrides_with_joins(df, csv_spark_df, config)
     return df
 
 def apply_overrides_with_loop(df, csv_dict, config):
@@ -54,7 +52,6 @@ def apply_overrides_with_loop(df, csv_dict, config):
                 
             try:
                 condition = build_condition(df, table, column, schema, catalog)
-                print("condition:", condition)
                 df = df.withColumn('classification', when(condition, lit(classification_override)).otherwise(col('classification')))
                 df = df.withColumn('type', when(condition, lit(type_override)).otherwise(col('type')))
             except ValueError as e:
@@ -166,7 +163,7 @@ def get_join_conditions(df: DataFrame, csv_spark_df: DataFrame) -> List[Column]:
     Returns:
         List[Column]: The list of join conditions.
     
-    NOT FULLY IMPLEMENTED
+    NOT IMPLEMENTED
     """
     join_condition = None
 

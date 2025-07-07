@@ -12,6 +12,7 @@ from src.dbxmetagen.processing import (
     sanitize_email
 )
 from src.dbxmetagen.config import MetadataConfig
+from src.dbxmetagen.deterministic_pi import ensure_spacy_model
 
 def main(kwargs):
     spark = SparkSession.builder.getOrCreate()
@@ -19,6 +20,8 @@ def main(kwargs):
         raise Exception("Invalid metadata_overrides.csv file. Please check the format of your metadata_overrides configuration file...")
 
     config = MetadataConfig(**kwargs)
+    if config.include_deterministic_pi and config.mode == "pi":
+        ensure_spacy_model(config.spacy_model_names)
     os.environ["DATABRICKS_HOST"]=config.base_url
     setup_ddl(config)
     create_tables(config)

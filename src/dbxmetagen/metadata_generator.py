@@ -13,6 +13,7 @@ from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
 from databricks_langchain import ChatDatabricks
+from src.dbxmetagen.deterministic_pi import detect_pi
 
 
 class Response(BaseModel):
@@ -157,7 +158,7 @@ class PIIdentifier(MetadataGenerator):
         except:
             print("Validation error - response \n\n\n response")
         return self.chat_response
-
+        
     def get_pi_response(self,
                              config: MetadataConfig,
                              content: str,

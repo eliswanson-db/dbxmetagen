@@ -10,7 +10,7 @@ variables:
     default: true
   sample_size:
     description: Sample size used per chunk in the prompt generation. when set to 0, no data will be sent to LLM, but due to leakage from metadata if this field alone is set, does not prevent data being added to comments.
-    default: 2
+    default: 5
   disable_medical_information_value:
     description: Set this to true if you want all phi assumptions to be as secure as possible. Under this setting there is no 'medical information' category. Instead, all medical information is converted to PHI. Note that this will mean that any downstream masking you do, and security concerns around your data will be much more stringent.
     default: true
@@ -33,8 +33,8 @@ variables:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
     default: false 
   model:
-    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, or databricks-meta-llama-3-3-70b-instruct. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision.
-    default: databricks-meta-llama-3-3-70b-instruct
+    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision.
+    default: databricks-claude-3-7-sonnet
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
@@ -42,8 +42,17 @@ variables:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
     default: true
   ddl_output_format:
-    description: Output format can be via SQL file (default) or via TSV if this improves reviewability.
+    description: Output format can be via sql file (default) or via tsv or excel if this improves reviewability.
     default: sql
+  reviewable_output_format:
+    description: Desired format for full run output for reviewability. tsv or excel 
+    default: tsv
+  include_deterministic_pi:
+    description: Run presidio analyzer before using LLM-based PI identification.
+    default: false
+  spacy_model_names:
+    description: spacy models to use in presidio. Currently will only handle a single model. Adding support for multiple models is a planned feature.
+    default: en_core_web_lg
   pi_classification_rules:
     description: Rules for PI classification. These rules will be injected into the prompt and provided along with the prompt to the model.
     default: |
@@ -134,7 +143,8 @@ variables:
     default: tsv
   review_output_file_type:
     description: sql, excel, or tsv. allows reviewed DDL to be exported in either format.
-    default: excel
+    default: sql
   review_apply_ddl:
     description: When running 'sync_reviewed_ddl', if this is set to true, the DDL will all be applied after running.
     default: false
+  
