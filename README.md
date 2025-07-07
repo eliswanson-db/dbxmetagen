@@ -79,8 +79,9 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 
 1. Clone the repo into Databricks (Git Folder or Workspace).
 2. Update `variables.yml` (host, catalog_name, etc.).
-3. Set notebook widget for comment or PI mode and run the notebook.
-4. Update `notebooks/table_names.csv`.
+3. Update `notebooks/table_names.csv`.
+4. Set notebook widget for comment or PI mode and run the notebook.
+
 
 ## Full Setup Instructions
 
@@ -90,6 +91,12 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 4. **Review and adjust settings:** Tweak options in `variables.yml` and `config.py`.
 5. **Add table names** in `notebooks/table_names.csv`.
 6. **Run and review outputs:** Generated DDL scripts are stored in the `generated_metadata` volume.
+
+## Details
+
+1. Some errors are silent by design, but they always show up in the log table, so review it if you are not seeing the outputs you expect.
+1. If you get an error partway through a run, the control table will still keep in memory the tables you entered the first time that haven't run yet, so you should be able to remove the table names from table_names.csv and run it again and it should pick up any unfinished tables. If you don't, you'll see that they all get run again anyways. This checkpointing is a feature.
+1. To make sure that column constraints are interpretable, make sure the constraint names relate to the column that they constrain, as constraints are pulled from the table metadata, not the column metadata, and they describe the constraint name, not the columns with the constraint.
 
 ## Configuration Reference
 

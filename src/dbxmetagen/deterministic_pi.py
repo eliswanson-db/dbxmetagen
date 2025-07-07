@@ -17,7 +17,7 @@ def get_analyzer_engine(add_pci: bool = True, add_phi: bool = True) -> AnalyzerE
     """
     analyzer = AnalyzerEngine()
     if add_pci:
-        # TODO: Need to build a library of recognizers.
+        # TODO: Need to build a library of specific recognizers for PCI.
         pci_patterns = [
             Pattern(name="credit_card_pattern", regex=r"\b(?:\d[ -]*?){13,16}\b", score=0.8)
         ]
@@ -28,7 +28,7 @@ def get_analyzer_engine(add_pci: bool = True, add_phi: bool = True) -> AnalyzerE
         )
         analyzer.registry.add_recognizer(pci_recognizer)
     if add_phi:
-        # TODO: Need to build a library of recognizers.
+        # TODO: Need to build a library of recognizers for medical information and PHI.
         mrn_pattern = Pattern(
             name="mrn_pattern",
             regex=r"\bMRN[:\s]*\d{6,10}\b",
@@ -73,13 +73,23 @@ def classify_column(
     """
     entity_map = {
         "PII": [
-            "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "ADDRESS", "US_SSN", "DATE_TIME"
+            "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "ADDRESS", "DATE_TIME", "NRP",
+            "LOCATION", "IP_ADDRESS", "URL", "CREDIT_CARD", "IBAN_CODE", "CRYPTO"
+        ],
+        "US": [
+            "US_SSN", "US_BANK_NUMBER", "US_DRIVER_LICENSE", "US_PASSPORT", "US_ITIN"
+        ],
+        "International": [
+            "UK_NHS", "UK_NINO", "IT_FISCAL_CODE", "IT_DRIVER_LICENSE", "IT_VAT_CODE",
+            "IT_PASSPORT", "IT_IDENTITY_CARD", "ES_NIF", "ES_NIE", "PL_PESEL", "SG_NRIC_FIN",
+            "SG_UEN", "AU_ABN", "AU_ACN", "AU_TFN", "AU_MEDICARE", "IN_PAN", "IN_AADHAAR",
+            "IN_VEHICLE_REGISTRATION", "IN_VOTER_ID", "IN_PASSPORT", "FI_PERSONAL_ID"
         ],
         "PHI": [
-            "MEDICAL_RECORD_NUMBER", "HEALTH_INSURANCE_NUMBER"
+            "MEDICAL_LICENSE", "MEDICAL_RECORD_NUMBER", "HEALTH_INSURANCE_NUMBER"
         ],
         "PCI": [
-            "CREDIT_CARD"
+            "CREDIT_CARD", "US_BANK_NUMBER", "IBAN_CODE"
         ]
     }
     detected_types = set()

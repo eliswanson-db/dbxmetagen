@@ -136,6 +136,7 @@ class Prompt(ABC):
         self.add_table_metadata_to_column_contents(table_metadata)
         self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
 
+
     def extract_column_metadata(self) -> Dict[str, Dict[str, Any]]:
         """
         Extract metadata for each column.
@@ -154,6 +155,31 @@ class Prompt(ABC):
             combined_metadata = self.add_column_metadata_to_column_contents(column_name, combined_metadata)
             column_metadata_dict[column_name] = combined_metadata
         return column_metadata_dict
+
+
+    def get_column_constraints(self, column_name: str, combined_metadata: Dict[str, str]):
+        """
+        Add column constraints to the column contents.
+
+        Args:
+            column_metadata (Tuple[Dict[str, str], str, str, str]): Tuple containing column constraints.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value
+        FROM system.information_schema.column_tags
+        WHERE catalog_name = '{catalog_name}'
+        AND schema_name = '{schema_name}'
+        AND table_name = '{table_name}';
+        """
+        result_df = self.spark.sql(query)
+        column_tags = result_df.groupBy("column_name").agg(
+            collect_list(struct("tag_name", "tag_value")).alias("tags")
+        ).collect()
+        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        logger.debug("column tags dict: %s", column_tags_dict)
+        return column_tags_dict        
+
 
     def add_column_metadata_to_column_contents(self, column_name: str, combined_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -181,8 +207,8 @@ class Prompt(ABC):
         column_tags, table_tags, table_constraints, table_comments = table_metadata
         self.prompt_content['column_contents']['table_tags'] = table_tags
         self.prompt_content['column_contents']['table_constraints'] = table_constraints
-        self.prompt_content['column_contents']['table_comments'] = table_comments
-        logger.debug(self.prompt_content)
+        if self.config.include_existing_table_comment:
+            self.prompt_content['column_contents']['table_comments'] = table_comments
 
     def get_column_tags(self) -> Dict[str, Dict[str, str]]:
         """
@@ -235,11 +261,19 @@ class Prompt(ABC):
         """
         catalog_name, schema_name, table_name = self.full_table_name.split('.')
         query = f"""
-        SELECT table_name, constraint_type
-        FROM system.information_schema.table_constraints
-        WHERE table_catalog = '{catalog_name}'
-        AND table_schema = '{schema_name}'
-        AND table_name = '{table_name}';
+        SELECT 
+        c.table_name, 
+        c.constraint_name, 
+        t.constraint_type, 
+        c.column_name
+        FROM system.information_schema.table_constraints t
+        LEFT JOIN system.information_schema.constraint_column_usage c
+                ON t.constraint_catalog = c.constraint_catalog 
+                AND t.constraint_schema = c.constraint_schema 
+                AND t.constraint_name = c.constraint_name
+        WHERE t.constraint_catalog = '{catalog_name}'
+        AND t.constraint_schema = '{schema_name}'
+        AND t.table_name = '{table_name}';
         """
         return self.df_to_json(self.spark.sql(query))
 
@@ -396,9 +430,11 @@ class PIPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
-        content = self.prompt_content
+        content = self.prompt_content                
         if self.config.include_deterministic_pi:
             self.deterministic_results = detect_pi(self.config, self.prompt_content)
+        else:
+            self.deterministic_results = ""
         acro_content = self.config.acro_content
         return {
             "pi": [
