@@ -1,9 +1,9 @@
 variables:
   catalog_name:
-    description: Target catalog where data, models, and files are stored for this project. If source tables are in this catalog, then table names only have to be scoped with schema and table. If table names are in other catalogs then table names need to be fully scoped.
+    description: Target catalog where data, models, and files are stored for this project. If source tables are in this catalog, then table names only have to be scoped with schema and table. If table names are in other catalogs then table names need to be fully scoped. Replace this catalog name with the main catalog you want to run dbxmetagen from.
     default: dbxmetagen
   host:
-    description: Base url host variable. If using asset bundles, will get overridden by target host. Otherwise, use the host here that you want to target.
+    description: Base url host variable. If using asset bundles, will get overridden by target host. Otherwise, use the host here that you want to target. Replace this example host name with a real one, specifically the one you will be using.
     default: https://adb-830292400663869.9.azuredatabricks.net/
   allow_data:
     description: Set this to false if you do not want data sent to LLMs, do not want any metadata stored in comments, and do not want metadata used that could leak data into metadata. Reduces quality of outputs. Internally sets sample_size to 0, allow_data_in_comments to false, and include_possible_data_fields_in_metadata to false.
@@ -36,8 +36,8 @@ variables:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
     default: false 
   model:
-    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision.
-    default: databricks-claude-3-7-sonnet
+    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision. 
+    default: databricks-meta-llama-3-3-70b-instruct
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
@@ -46,7 +46,7 @@ variables:
     default: true
   ddl_output_format:
     description: Output format can be via sql file (default) or via tsv or excel if this improves reviewability. This file is the individual output files.
-    default: tsv
+    default: sql
   reviewable_output_format:
     description: Desired format for full run output for reviewability. tsv or excel 
     default: excel
@@ -143,7 +143,7 @@ variables:
     default: default
   review_input_file_type:
     description: excel or tsv. allows reviewed DDL to be in either format.
-    default: tsv
+    default: excel
   review_output_file_type:
     description: sql, excel, or tsv. allows reviewed DDL to be exported in either format.
     default: excel
