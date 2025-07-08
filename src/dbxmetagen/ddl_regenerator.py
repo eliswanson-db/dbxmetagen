@@ -91,13 +91,13 @@ def get_pii_tags_from_ddl(ddl: str, classification: str, subclassification: str)
     if "ALTER COLUMN" not in ddl:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     return classification, subclassification
@@ -144,7 +144,7 @@ def update_ddl_row(mode: str, reviewed_column: str, row: pd.Series) -> Union[str
     """
     if mode == 'pi':
         if reviewed_column == 'ddl':
-            new_classification, new_type = get_pii_tags_from_ddl(row['ddl'])
+            new_classification, new_type = get_pii_tags_from_ddl(row['ddl'], row['classification'], row['type'])
             return new_classification, new_type, row['ddl']
         elif reviewed_column in ('classification', 'type', 'other', 'column_content'):
             new_ddl = replace_pii_tags_in_ddl(row['ddl'], row['classification'], row['type'])

@@ -143,13 +143,13 @@ variables:
     default: default
   review_input_file_type:
     description: excel or tsv. allows reviewed DDL to be in either format.
-    default: excel
+    default: tsv
   review_output_file_type:
     description: sql, excel, or tsv. allows reviewed DDL to be exported in either format.
-    default: excel
+    default: tsv
   review_apply_ddl:
     description: When running 'sync_reviewed_ddl', if this is set to true, the DDL will all be applied after running.
-    default: false
+    default: true
   column_with_reviewed_ddl:
-    description: When reviewing content and supplying it back to the sync process, should the DDL column be reviewed and modified, or the other columns - column_content for comments, and classification/type for pi identification. For ddl, the option should be 'ddl'. For the alternative column the specified option should just be 'other'.
-    default: ddl
+    description: When reviewing content and supplying it back to the sync process, do not modify the DDL column, modify the columns 'column_content' or 'type' and 'classification'. For the alternative column the specified option should just be 'other'. We will add an option to modify the DDL in a future release.
+    default: other
