@@ -25,10 +25,9 @@ def main(kwargs):
     os.environ["DATABRICKS_HOST"]=config.base_url
     setup_ddl(config)
     create_tables(config)
-    queue = setup_queue(config)
+    config.table_names = setup_queue(config)
     if config.control_table:
-        upsert_table_names_to_control_table(queue, config)
-    config.table_names = list(set(config.table_names).union(set(queue)))
+        upsert_table_names_to_control_table(config.table_names, config)    
     print("Running generate on...", config.table_names)
     generate_and_persist_metadata(config)
     spark.sql(f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_email(config.current_user)}""")

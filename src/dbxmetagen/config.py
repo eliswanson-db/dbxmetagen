@@ -45,7 +45,9 @@ class MetadataConfig:
                                 'review_output_file_type',
                                 'include_deterministic_pi',
                                 'reviewable_output_format',
-                                'spacy_model_names']    
+                                'spacy_model_names',
+                                'include_existing_table_comment',
+                                'column_with_reviewed_ddl']    
     }
     MODEL_PARAMS = {
     }
@@ -76,8 +78,7 @@ class MetadataConfig:
             self.sample_size = 0
             self.filter_data_from_metadata = True
             self.include_possible_data_fields_in_metadata = False
-
-        print(self.current_user)
+        
 
     def load_yaml(self):
         with open(self.yaml_file_path, 'r') as file:
