@@ -253,7 +253,7 @@ Put the file you want to review in 'reviewed_outputs' folder in your user folder
 
 ## Current Status
 
-- Tested on DBR 14.3 ML LTS, 15.4 ML LTS.
+- Tested on DBR 16.4 LTS.
 - Default: Generates `ALTER TABLE` scripts, stores in a volume.
 - Print-based logging for debugging and transparency.
 
