@@ -34,18 +34,25 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 - Generated comments may include data samples or metadata, depending on settings.
 - Use [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) to mitigate risks.
 - Compliance (e.g., HIPAA) is the user's responsibility.
-- Unless configured otherwise, dbxmetagen inspects data and sends it to the specified model endpoint.
+- Unless configured otherwise, dbxmetagen inspects data and sends it to the specified model endpoint. There are a wide variety of options to control this behavior in detail.
 
 ## Solution Overview
 
 - **Configuration-driven:** All settings are managed via `variables.yml`.
+- **AI-assisted:** Both comment generation and PI identification and classification use both AI-based and deterministic or data engineering approaches, combining multiple sophisticated approaches to get you quality metadata.
 - **Data Sampling:** Controls over sample size, inclusion of data, and metadata.
-- **Validation:** Uses `Pydantic` for schema enforcement.
+- **Validation:** Uses `Pydantic` and structured outputs for schema enforcement.
 - **Logging:** Tracks processed tables and results.
 - **DDL Generation:** Produces `ALTER TABLE` statements for integration.
 - **Manual Overrides:** Supports CSV-based overrides for granular control.
 
 ## User Guide
+
+### Entry points
+Both primary entry points for this application are Databricks notebooks.
+
+- **dbxmetagen/src/notebooks/generate_metadata** This is the primary entry point for the application, allowing both comment generation and PI identification and classification.
+- **dbxmetagen/src/notebooks/sync_reviewed_ddl** This utility allows re-integration of reviewed and edited run logs in tsv or excel format to be used to apply DDL to tables.
 
 ### Personas
 
@@ -267,17 +274,17 @@ If a table has columns with both PII and PHI, or with PII and medical informatio
 
 ## Under Development
 
-- Prompt registration and model evaluation.
-- Deterministic PI identification/classification checks.
+- Prompt registration and model evaluation using agent evals.
 - Support for multiple spaCy models and custom PI column field names.
+- Add ALTER COLUMNS support
 
 ## License
 
 This project is licensed under the Databricks DB License.
 
-## Library Analysis: Status, Open Source Nature, and Licensing
+## Analysis of packages used
 
-Below is a detailed table summarizing the status, open source availability, and licensing details for each library listed:
+Below is a detailed table summarizing the status, open source availability, and licensing details for each Python library used in this project:
 
 | Library (Version)           | Status / Description                                                                 | Open Source | License Type & Details                                                                                          |
 |-----------------------------|-------------------------------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------------------------|
@@ -308,24 +315,43 @@ Below is a detailed table summarizing the status, open source availability, and 
 This table should provide a clear overview for compliance, integration, and open source policy review.
 
 [1] https://github.com/mlflow/mlflow/blob/master/LICENSE.txt
+
 [2] https://pypi.org/project/mlflow/
+
 [3] https://github.com/openai/openai-quickstart-python/blob/master/LICENSE
+
 [4] https://release-monitoring.org/project/python-cloudpickle
+
 [5] https://github.com/conda-forge/pydantic-feedstock/blob/main/LICENSE.txt
+
 [6] https://github.com/ydataai/ydata-profiling/blob/develop/LICENSE
+
 [7] https://pypi.org/project/databricks-langchain/
+
 [8] https://layers.openembedded.org/layerindex/recipe/120206/
+
 [9] https://github.com/ipipan/spacy-pl/blob/master/LICENSE
+
 [10] http://mlflow.org/releases/2.18.0
+
 [11] https://security.snyk.io/package/pip/mlflow/2.18.0
+
 [12] http://mlflow.org
+
 [13] https://launchpad.net/ubuntu/+source/cloudpickle/3.1.0-1
+
 [14] https://github.com/FullStackWithLawrence/pydantic-example/blob/main/LICENSE
+
 [15] https://github.com/mlflow/mlflow/blob/master/CHANGELOG.md
+
 [16] https://github.com/openai/openai-python/blob/main/LICENSE
+
 [17] https://github.com/ydataai/ydata-profiling/releases
+
 [18] https://hiplab.mc.vanderbilt.edu/git/steve/databricks-cli/src/commit/e236c8a54546a08e5415fcf83ab4d200769dde1d/LICENSE
+
 [19] https://github.com/LaneDoyle/OpenPyxl-Examples/blob/master/LICENSE
+
 [20] https://huggingface.co/spacy/pl_core_news_lg/blob/main/LICENSES_SOURCES
 
 ## Acknowledgements

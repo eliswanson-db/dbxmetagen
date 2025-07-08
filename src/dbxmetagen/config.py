@@ -46,7 +46,8 @@ class MetadataConfig:
                                 'include_deterministic_pi',
                                 'reviewable_output_format',
                                 'spacy_model_names',
-                                'include_existing_table_comment']    
+                                'include_existing_table_comment',
+                                'column_with_reviewed_ddl']    
     }
     MODEL_PARAMS = {
     }

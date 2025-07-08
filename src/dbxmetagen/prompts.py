@@ -249,7 +249,6 @@ class Prompt(ABC):
         AND table_name = '{table_name}';
         """
         result_df = self.spark.sql(query)
-        #logger.debug("table tags result: %s", result_df)
         return self.df_to_json(result_df)
 
     def get_table_constraints(self) -> str:
@@ -327,7 +326,6 @@ class Prompt(ABC):
             json_response = '[' + json_response + ']'
             logger.debug("json response in prompt: %s", json_response)
         return json_response
-
 
 
 class CommentPrompt(Prompt):

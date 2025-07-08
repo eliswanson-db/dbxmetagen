@@ -74,7 +74,7 @@ def classify_column(
     entity_map = {
         "PII": [
             "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "ADDRESS", "DATE_TIME", "NRP",
-            "LOCATION", "IP_ADDRESS", "URL", "CREDIT_CARD", "IBAN_CODE", "CRYPTO"
+            "LOCATION", "IP_ADDRESS", "URL", "CREDIT_CARD", "IBAN_CODE", "CRYPTO", 
         ],
         "US": [
             "US_SSN", "US_BANK_NUMBER", "US_DRIVER_LICENSE", "US_PASSPORT", "US_ITIN"
@@ -86,7 +86,7 @@ def classify_column(
             "IN_VEHICLE_REGISTRATION", "IN_VOTER_ID", "IN_PASSPORT", "FI_PERSONAL_ID"
         ],
         "PHI": [
-            "MEDICAL_LICENSE", "MEDICAL_RECORD_NUMBER", "HEALTH_INSURANCE_NUMBER"
+            "MEDICAL_LICENSE", "MEDICAL_RECORD_NUMBER", "HEALTH_INSURANCE_NUMBER" "PATIENT_NAME", 
         ],
         "PCI": [
             "CREDIT_CARD", "US_BANK_NUMBER", "IBAN_CODE"

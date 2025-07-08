@@ -41,6 +41,7 @@ from src.dbxmetagen.metadata_generator import (
 from src.dbxmetagen.overrides import (override_metadata_from_csv, apply_overrides_with_loop, 
     apply_overrides_with_joins, build_condition, get_join_conditions
 )
+from src.dbxmetagen.parsing import cleanse_sql_comment
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -197,8 +198,6 @@ def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name:
     Returns:
         List[Row]: The updated list of rows with the new column rows appended.
     """
-    print("zip of columns and column contents", zip(response.columns, response.column_contents))
-
     for column_name, column_content in zip(response.columns, response.column_contents):
         if (isinstance(column_content, dict) or isinstance(column_content, PIColumnContent)) and config.mode == "pi":
             if isinstance(column_content, PIColumnContent):
@@ -318,7 +317,6 @@ def add_column_ddl_to_pi_df(config, df: DataFrame, ddl_column: str) -> DataFrame
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    print("Tag none fields from config", config.tag_none_fields)
     if not config.tag_none_fields:
         df = df.filter(col("type") != "None")
     df = df.withColumn(ddl_column, generate_pi_information_ddl('tokenized_table', 'column_name', 'classification', 'type'))
@@ -826,14 +824,10 @@ def create_and_persist_ddl(df: DataFrame,
     current_date = datetime.now().strftime('%Y%m%d')
     if config.volume_name:
         base_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{current_user}/{current_date}"
-        print(f"Writing table and column DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
-        print("config_mode", f"{config.mode}")
-        #print("Populate log schema for table", table_df.schema)
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         column_df = df[f'{config.mode}_column_df']
-        #print("Populate log schema for table", table_df.schema)
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         unioned_df = table_df.union(column_df)
@@ -881,7 +875,6 @@ def get_generated_metadata_data_aware(spark: SparkSession, config: MetadataConfi
         prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
         prompt_messages = prompt.create_prompt_template()
         num_words = check_token_length_against_num_words(prompt_messages, config)
-        print("number of words in prompt:", num_words)
         if config.registered_model_name != "default":
             call_registered_model(config, prompt)
         else:
@@ -979,7 +972,6 @@ def apply_comment_ddl(df: DataFrame, config: MetadataConfig) -> None:
     ddl_statements = df.select("ddl").collect()
     for row in ddl_statements:
         ddl_statement = row["ddl"]
-        print(f"Executing DDL: {ddl_statement}")
         if not config.dry_run:
             spark.sql(ddl_statement)
 
@@ -1032,7 +1024,8 @@ def add_ddl_to_dfs(config, table_df, column_df, table_name):
     elif config.mode == "pi":
         dfs['pi_column_df'] = add_column_ddl_to_pi_df(config, column_df, "ddl")
         table_df = create_pi_table_df(dfs['pi_column_df'], table_name)
-        dfs['pi_table_df']= set_protected_classification(table_df, config)
+        if table_df is not None:
+            dfs['pi_table_df']= set_protected_classification(table_df, config)
         if config.apply_ddl:
             apply_ddl_to_tables(dfs, config)
     else:
@@ -1138,6 +1131,9 @@ def setup_ddl(config: MetadataConfig) -> None:
     print(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
+        review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_email(config.current_user)}/reviewed_outputs/"
+        if not os.path.exists(review_output_path):
+            os.mkdir(review_output_path)
 
 
 def create_tables(config: MetadataConfig) -> None:
@@ -1304,7 +1300,8 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
         queued_table_names = {row["table_name"] for row in control_df.collect()}
-    config_table_names = config.table_names
+    config_table_string = config.table_names
+    config_table_names = [name.strip() for name in config_table_string.split(',') if len(name.strip()) > 0]
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
     combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog_name)
@@ -1415,7 +1412,7 @@ def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
     Returns:
         str: The DDL statement for adding the
     """
-    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
+    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{cleanse_sql_comment(comment)}";"""
     return ddl_statement
 
 
@@ -1431,7 +1428,7 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{comment}";"""
+    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
     return ddl_statement
 
 
