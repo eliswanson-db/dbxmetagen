@@ -2,6 +2,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 import pandas as pd
+from src.dbxmetagen.deterministic_pi import detect_pi
+
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import collect_list, struct, to_json
 
@@ -80,24 +82,50 @@ class Prompt(ABC):
 
     def filter_extended_metadata_fields(self, extended_metadata_df: DataFrame) -> DataFrame:
         """
-        Filter extended metadata fields based on the mode.
-
+        Filter extended metadata fields based on the current configuration mode.
+        
+        In 'pi' mode: Filters out NULL info_values
+        In 'comment' mode: Filters NULL values, descriptions, comments, and optionally data_type
+        
         Args:
-            extended_metadata_df (DataFrame): DataFrame containing extended metadata.
-
+            extended_metadata_df: DataFrame containing extended metadata
+            
         Returns:
-            DataFrame: Filtered DataFrame.
+            Filtered DataFrame
+            
+        Raises:
+            ValueError: For invalid mode configuration
         """
-        if self.config.mode == "pi":
-            return extended_metadata_df.filter(extended_metadata_df["info_value"] != "NULL")
-        elif self.config.mode == "comment":
-            return extended_metadata_df.filter(
-                (extended_metadata_df["info_value"] != "NULL") &
-                (extended_metadata_df["info_name"] != "description") &
-                (extended_metadata_df["info_name"] != "comment")
-            )
-        else:
-            raise ValueError("Invalid mode provided. Please provide either 'pi' or 'comment'.")
+        mode_handlers = {
+            "pi": self._filter_pi_mode,
+            "comment": self._filter_comment_mode
+        }
+        
+        handler = mode_handlers.get(self.config.mode)
+        if not handler:
+            raise ValueError("Invalid mode provided. Please use either 'pi' or 'comment'")
+        
+        return handler(extended_metadata_df)
+
+    def _filter_pi_mode(self, df: DataFrame) -> DataFrame:
+        """Filter metadata for PI mode (remove NULL values)"""
+        return df.filter(df["info_value"] != "NULL")
+
+    def _filter_comment_mode(self, df: DataFrame) -> DataFrame:
+        """Filter metadata for comment mode with additional exclusions"""
+        filtered_df = df.filter(
+            (df["info_value"] != "NULL") &
+            ~df["info_name"].isin(["description", "comment"])
+        )
+        
+        if not self.config.include_datatype_from_metadata:
+            filtered_df = filtered_df.filter(df["info_name"] != "data_type")
+
+        if not self.config.include_possible_data_fields_in_metadata:
+            filtered_df = filtered_df.filter(~df["info_name"].isin(["min", "max"]))
+        
+        return filtered_df
+
 
     def add_metadata_to_comment_input(self) -> None:
         """
@@ -107,6 +135,7 @@ class Prompt(ABC):
         table_metadata = self.get_table_metadata()
         self.add_table_metadata_to_column_contents(table_metadata)
         self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
+
 
     def extract_column_metadata(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -126,6 +155,31 @@ class Prompt(ABC):
             combined_metadata = self.add_column_metadata_to_column_contents(column_name, combined_metadata)
             column_metadata_dict[column_name] = combined_metadata
         return column_metadata_dict
+
+
+    def get_column_constraints(self, column_name: str, combined_metadata: Dict[str, str]):
+        """
+        Add column constraints to the column contents.
+
+        Args:
+            column_metadata (Tuple[Dict[str, str], str, str, str]): Tuple containing column constraints.
+        """
+        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        query = f"""
+        SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value
+        FROM system.information_schema.column_tags
+        WHERE catalog_name = '{catalog_name}'
+        AND schema_name = '{schema_name}'
+        AND table_name = '{table_name}';
+        """
+        result_df = self.spark.sql(query)
+        column_tags = result_df.groupBy("column_name").agg(
+            collect_list(struct("tag_name", "tag_value")).alias("tags")
+        ).collect()
+        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        logger.debug("column tags dict: %s", column_tags_dict)
+        return column_tags_dict        
+
 
     def add_column_metadata_to_column_contents(self, column_name: str, combined_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -153,8 +207,8 @@ class Prompt(ABC):
         column_tags, table_tags, table_constraints, table_comments = table_metadata
         self.prompt_content['column_contents']['table_tags'] = table_tags
         self.prompt_content['column_contents']['table_constraints'] = table_constraints
-        self.prompt_content['column_contents']['table_comments'] = table_comments
-        logger.debug(self.prompt_content)
+        if self.config.include_existing_table_comment:
+            self.prompt_content['column_contents']['table_comments'] = table_comments
 
     def get_column_tags(self) -> Dict[str, Dict[str, str]]:
         """
@@ -195,7 +249,6 @@ class Prompt(ABC):
         AND table_name = '{table_name}';
         """
         result_df = self.spark.sql(query)
-        #logger.debug("table tags result: %s", result_df)
         return self.df_to_json(result_df)
 
     def get_table_constraints(self) -> str:
@@ -207,11 +260,19 @@ class Prompt(ABC):
         """
         catalog_name, schema_name, table_name = self.full_table_name.split('.')
         query = f"""
-        SELECT table_name, constraint_type
-        FROM system.information_schema.table_constraints
-        WHERE table_catalog = '{catalog_name}'
-        AND table_schema = '{schema_name}'
-        AND table_name = '{table_name}';
+        SELECT 
+        c.table_name, 
+        c.constraint_name, 
+        t.constraint_type, 
+        c.column_name
+        FROM system.information_schema.table_constraints t
+        LEFT JOIN system.information_schema.constraint_column_usage c
+                ON t.constraint_catalog = c.constraint_catalog 
+                AND t.constraint_schema = c.constraint_schema 
+                AND t.constraint_name = c.constraint_name
+        WHERE t.constraint_catalog = '{catalog_name}'
+        AND t.constraint_schema = '{schema_name}'
+        AND t.table_name = '{table_name}';
         """
         return self.df_to_json(self.spark.sql(query))
 
@@ -267,7 +328,6 @@ class Prompt(ABC):
         return json_response
 
 
-
 class CommentPrompt(Prompt):
     def convert_to_comment_input(self) -> Dict[str, Any]:
         pandas_df = self.df.toPandas()
@@ -289,7 +349,7 @@ class CommentPrompt(Prompt):
               [
                 {
                     "role": "system",
-                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks.
+                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. You are very careful to properly identify PII, PCI, and PHI, and you care deeply about ensuring high quality responses.
 
 
                     ###
@@ -314,6 +374,8 @@ class CommentPrompt(Prompt):
                     6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
                     7. Column contents will only represent a subset of data in the table so please provide information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample.
                     8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
+                    9. Consider that any DDL generated could be run directly in SQL or in Python, and make sure that it's directly runnable without error. Outer strings should be double quoted. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
+                    10. Use double quotes to enclose all comments. Apostrophe's need to be escaped.
 
                     ###
                     Please generate a description for the table and columns in the following string.
@@ -366,7 +428,11 @@ class PIPrompt(Prompt):
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
-        content = self.prompt_content
+        content = self.prompt_content                
+        if self.config.include_deterministic_pi:
+            self.deterministic_results = detect_pi(self.config, self.prompt_content)
+        else:
+            self.deterministic_results = ""
         acro_content = self.config.acro_content
         return {
             "pi": [
@@ -394,11 +460,17 @@ class PIPrompt(Prompt):
                     6. Any freeform medical information should be considered PHI, because it's not possible to guarantee it has no personal information. For example, "medical_notes", "chart_information", "doctor_notes".
                     7. Always prioritize the more secure type of data. For example, if the decision between PII and PHI is unclear, PHI should be chosen. If the decision between medical information and PHI is unclear, PHI should be chosen should be chosen.
                     8. The medical information type should only be used in the scenario where the data has clearly been de-identified or contains something like medication from a picklist - e.g. "diabetes", "ibuprofen". Anytime you may have personally identifying information in connection to healthcare data, use PHI.
+                    9. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
+                    10. If they are provided, consider the presidio or regex results in your response, but rely more on your own judgement. Use all deterministic results provided to you as a check on your own output. If Presidio appears to find PII that you miss, bias toward using it, but if you identify PII that Presidio misses, bias toward your own result. If you find that you disagree with the Presidio results, deliver a reduced confidence level.
 
                     ###
                     """
                     +
-                    f"""PI Classification Rules: {self.config.pi_classification_rules}."""
+                    f"""PI Classification Rules: {self.config.pi_classification_rules}.
+                    \n
+                    ###
+                    """
+
                 },
                 {
                     "role": "user",
@@ -426,7 +498,12 @@ class PIPrompt(Prompt):
                 },
                 {
                     "role": "user",
-                    "content": f"{content}"
+                    "content": f"""{content}.
+                    \n
+                    ###
+                    Deterministic results from Presidio or other outside checks to consider to help check your outputs are here: {self.deterministic_results}.
+                    ###
+                    """
                 }
               ]
         }
@@ -453,7 +530,7 @@ class CommentNoDataPrompt(Prompt):
               [
                 {
                     "role": "system",
-                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions.
+                    "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions. It doesn't matter if data are coming from data pulls or from stored metadata, do not include any data in your outputs.
 
 
                     ###
@@ -478,7 +555,10 @@ class CommentNoDataPrompt(Prompt):
                     6. Please unpack any acronyms and abbreviations if you are confident in the interpretation.
                     7. Column contents will only represent a subset of data in the table so please provide aggregated information about the data in the sample but but be cautious inferring too strongly about the entire column based on the sample. Do not provide any actual data in the comment.
                     8. Only provide a dictionary. Any response other than the dictionary will be considered invalid. Make sure the list of column_names in the response content match the dictionary keys in the prompt input in column_contents.
-                    9. Do not provide any actual data in the comment.
+                    9. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
+                    10. Do not provide any actual data in the comment.
+                    11. Consider that any DDL generated could be run directly in SQL or in Python, and make sure that it's directly runnable without error. Outer strings should be double quoted. Within strings, use single quotes as would be needed if the comment or column_content would be used as a Python string or in SQL DDL. For example format responses like: "The column 'scope' is a summary column.", rather than "The column "scope" is a summary column."
+                    12. Try not to generate apostrophes. When you must use them, determine if the generated text is DDL or not. If it is DDL or a comment that might be inserted into DDL, escape it like: '', with two single quotes in a row, for a SQL escape. If it is used in another context, you can escape it using a back slash as a standard Python escape for an apostrophe.
 
                     ###
                     Please generate a description for the table and columns in the following string.
@@ -521,7 +601,7 @@ class CommentNoDataPrompt(Prompt):
 class PromptFactory:
     @staticmethod
     def create_prompt(config, df, full_table_name) -> Prompt:
-        if config.mode == "comment" and config.allow_data:
+        if config.mode == "comment" and config.allow_data_in_comments:
             return CommentPrompt(config, df, full_table_name)
         elif config.mode == "comment":
             return CommentNoDataPrompt(config, df, full_table_name)

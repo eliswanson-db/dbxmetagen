@@ -7,8 +7,10 @@ import time
 from abc import ABC
 from datetime import datetime
 from typing import List, Dict, Any, Literal, Tuple
+import traceback
 
 import csv
+from shutil import copyfile
 import mlflow
 import nest_asyncio
 import pandas as pd
@@ -33,12 +35,13 @@ from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactor
 from src.dbxmetagen.error_handling import exponential_backoff, validate_csv
 from src.dbxmetagen.comment_summarizer import TableCommentSummarizer
 from src.dbxmetagen.metadata_generator import (
-    Response, PIResponse, CommentResponse, MetadataGeneratorFactory, 
+    Response, PIResponse, CommentResponse, PIColumnContent, MetadataGeneratorFactory, 
     PIIdentifier, MetadataGenerator, CommentGenerator
 )
 from src.dbxmetagen.overrides import (override_metadata_from_csv, apply_overrides_with_loop, 
     apply_overrides_with_joins, build_condition, get_join_conditions
 )
+from src.dbxmetagen.parsing import cleanse_sql_comment
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -63,18 +66,6 @@ class Input(BaseModel):
             "table_name": f"{catalog_name}.{schema_name}.{table_name}",
             "column_contents": cls.df.toPandas().to_dict(orient='list')
         }
-
-class PInput(Input):
-    ### Currently not implemented.
-
-    column_contents: List[Dict[str, Any]]
-
-
-class CommentInput(Input):
-    ### Currently not implemented.
-
-    column_contents: List[List[Any]]
-
 
 def tag_table(table_name: str, tags: Dict[str, str]) -> None:
     """
@@ -102,8 +93,10 @@ def write_to_log_table(log_data: Dict[str, Any], log_table_name: str) -> None:
     log_df.write.format("delta").option("mergeSchema", "true").mode("append").saveAsTable(log_table_name)
 
 
-
-def count_df_columns(df):
+def count_df_columns(df: DataFrame) -> int:
+    """
+    Count the number of columns in a spark dataframe and return.
+    """
     return len(df.columns)
 
 
@@ -129,10 +122,6 @@ def chunk_df(df: DataFrame, columns_per_call: int = 5) -> List[DataFrame]:
         dataframes.append(chunk_df)
 
     return dataframes
-
-    ### ALternate:
-    #col_names = df.columns
-    #return [df.select(col_names[i:i + columns_per_call]) for i in range(0, len(col_names), columns_per_call)]
 
 
 def get_extended_metadata_for_column(config, table_name, column_name):
@@ -209,10 +198,10 @@ def append_column_rows(config: MetadataConfig, rows: List[Row], full_table_name:
     Returns:
         List[Row]: The updated list of rows with the new column rows appended.
     """
-    print("zip of columns and column contents", zip(response.columns, response.column_contents))
-
     for column_name, column_content in zip(response.columns, response.column_contents):
-        if isinstance(column_content, dict) and config.mode == "pi":
+        if (isinstance(column_content, dict) or isinstance(column_content, PIColumnContent)) and config.mode == "pi":
+            if isinstance(column_content, PIColumnContent):
+                column_content = column_content.model_dump()
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,
@@ -328,7 +317,6 @@ def add_column_ddl_to_pi_df(config, df: DataFrame, ddl_column: str) -> DataFrame
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    print("Tag none fields from config", config.tag_none_fields)
     if not config.tag_none_fields:
         df = df.filter(col("type") != "None")
     df = df.withColumn(ddl_column, generate_pi_information_ddl('tokenized_table', 'column_name', 'classification', 'type'))
@@ -371,6 +359,76 @@ def df_to_sql_file(df: DataFrame, catalog_name: str, dest_schema_name: str, tabl
         for item in column_list:
             file.write(f"{item}\n")
     return uc_volume_path
+
+
+class DataFrameToExcelError(Exception):
+    """Custom exception for DataFrame to Excel export errors."""
+
+
+def ensure_directory_exists(directory_path: str) -> None:
+    """
+    Ensures that the specified directory exists, creating it if necessary.
+
+    Args:
+        directory_path (str): The directory to check or create.
+
+    Raises:
+        DataFrameToExcelError: If directory creation fails.
+    """
+    try:
+        if not os.path.exists(directory_path):
+            os.makedirs(directory_path)
+            logger.info(f"Created directory: {directory_path}")
+    except Exception as e:
+        logger.error(f"Failed to create directory {directory_path}: {e}")
+        raise DataFrameToExcelError(f"Directory creation failed: {e}")
+
+
+def df_column_to_excel_file(
+    df: pd.DataFrame,
+    filename: str,
+    base_path: str,
+    excel_column: str
+) -> str:
+    """
+    Exports a specified column from a DataFrame to an Excel file.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to export.
+        filename (str): The name of the output Excel file (without extension).
+        volume_name (str): Volume name (used in path).
+        excel_column (str): The column to export.
+
+    Returns:
+        str: The path to the created Excel file.
+
+    Raises:
+        DataFrameToExcelError: If export fails.
+    """
+    logger.info("Starting export of DataFrame column to Excel.")
+    try:
+        if excel_column not in df.columns:
+            logger.error(f"Column '{excel_column}' not found in DataFrame.")
+            raise DataFrameToExcelError(f"Column '{excel_column}' does not exist in DataFrame.")
+
+        output_dir = base_path
+        ensure_directory_exists(output_dir)
+        excel_file_path = os.path.join(output_dir, f"{filename}.xlsx")
+        local_path = f"/local_disk0/tmp/{filename}.xlsx"
+        df[[excel_column]].to_excel(local_path, index=False, engine="openpyxl")
+        copyfile(local_path, excel_file_path)
+        logger.info(f"Successfully wrote column '{excel_column}' to Excel file: {excel_file_path}")
+
+        if not os.path.isfile(excel_file_path):
+            logger.error(f"Excel file was not created: {excel_file_path}")
+            raise DataFrameToExcelError(f"Excel file was not created: {excel_file_path}")
+
+        print(f"Excel file created at: {excel_file_path}")
+        return excel_file_path
+
+    except Exception as e:
+        logger.error(f"Error exporting DataFrame to Excel: {e}")
+        raise DataFrameToExcelError(f"Failed to export DataFrame to Excel: {e}")
 
 
 def populate_log_table(df, config, current_user, base_path):
@@ -455,21 +513,141 @@ def run_log_table_ddl(config):
         raise ValueError(f"Invalid mode: {config.mode}, please choose pi or comment.")
 
 
+def output_df_pandas_to_tsv(df, output_file):
+    pandas_df = df.toPandas()
+    write_header = not os.path.exists(output_file)
+    pandas_df.to_csv(
+        output_file,
+        sep='\t',
+        header=write_header,
+        index=False,
+        mode='a'
+    )
+
+
 def _export_table_to_tsv(df, config):
     """
     Reads a table from Databricks, writes it as a TSV file to a volume, and drops the original table.
-    
+
     Args:
-        config: Configuration object containing catalog_name, schema_name, mode, current_user, and volume_name
-    
+        df: Spark DataFrame to export.
+        config: Configuration object containing catalog_name, schema_name, mode, current_user, volume_name, etc.
+
     Returns:
-        bool: True if operation was successful, False otherwise
+        str: Table name if operation was successful, False otherwise.
     """
-    spark = SparkSession.builder.getOrCreate()
+    try:
+        required_attrs = ['catalog_name', 'schema_name', 'mode', 'volume_name']
+        for attr in required_attrs:
+            if not hasattr(config, attr) or not getattr(config, attr):
+                raise ValueError(f"Missing or empty required config attribute: {attr}")
 
+        if df is None:
+            raise ValueError("Input DataFrame is None.")
+        if not hasattr(df, 'count') or not callable(getattr(df, 'count')):
+            raise TypeError("Input is not a valid Spark DataFrame.")
+
+        date = datetime.now().strftime("%Y%m%d")
+        if not hasattr(config, 'log_timestamp') or not config.log_timestamp:
+            config.log_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp = config.log_timestamp
+
+        filename = f"review_metadata_{config.mode}_{config.log_timestamp}.tsv"
+        local_path = f"/local_disk0/tmp/{filename}"
+        current_user = sanitize_email(get_current_user())
+        table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
+        volume_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
+        folder_path = f"{volume_path}/{current_user}/{date}/exportable_run_logs/"
+        output_file = f"{folder_path}review_metadata_{config.mode}_{config.log_timestamp}.tsv"
+
+        try:
+            create_folder_if_not_exists(folder_path)
+        except Exception as e:
+            print(f"Error creating output directory '{folder_path}': {str(e)}")
+            return False
+
+        try:
+            row_count = df.count()
+        except Exception as e:
+            print(f"Error counting rows in DataFrame: {str(e)}")
+            return False
+        if row_count == 0:
+            print("Warning: Table is empty")
+
+        print(f"Writing to TSV file: {output_file}")
+
+        try:
+            df.write.mode("append").saveAsTable(table_name)
+        except Exception as e:
+            print(f"Error writing Spark DataFrame to table '{table_name}': {str(e)}")
+            return False
+
+        try:
+            output_df_pandas_to_tsv(df, local_path)
+            copyfile(local_path, output_file)
+        except Exception as e:
+            print(f"Error writing DataFrame to TSV file '{output_file}': {str(e)}")
+            return False
+
+        print("Export completed successfully...")
+        return table_name
+
+    except ValueError as ve:
+        print(f"ValueError: {str(ve)}")
+        return False
+    except TypeError as te:
+        print(f"TypeError: {str(te)}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error during full log export process: {str(e)}")
+        return False
+    
+    
+class ExportError(Exception):
+    """Custom exception for export errors."""
+
+
+def create_folder_if_not_exists(path: str) -> None:
+    try:
+        if not os.path.exists(path):
+            os.makedirs(path)
+            logger.info(f"Created directory: {path}")
+    except Exception as e:
+        logger.error(f"Failed to create directory {path}: {e}")
+        raise ExportError(f"Directory creation failed: {e}")
+
+
+def export_df_to_excel(df: pd.DataFrame, output_file: str, export_folder: str) -> None:
+    try:
+        local_path = f"/local_disk0/tmp/{output_file}"
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        if not os.path.exists(local_path):
+            pd.DataFrame().to_excel(local_path)
+        with pd.ExcelWriter(local_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+            df.to_excel(writer, sheet_name='Sheet1', startrow=writer.sheets['Sheet1'].max_row, header=False, index=False)
+        copyfile(local_path, os.path.join(export_folder, output_file))
+        logger.info(f"Excel file created at: {output_file}")
+    except Exception as e:
+        logger.error(f"Failed to export DataFrame to Excel: {e}")
+        raise ExportError(f"Failed to export DataFrame to Excel: {e}")
+
+
+def _export_table_to_excel(df: Any, config: Any) -> str:
+    """
+    Reads a table from Databricks, writes it as an Excel file to a volume, and drops the original table.
+
+    Args:
+        df: DataFrame to export (Spark or pandas)
+        config: Configuration object containing catalog_name, schema_name, mode, current_user, and volume_name
+
+    Returns:
+        str: The path to the Excel file if successful
+
+    Raises:
+        ExportError: If export fails
+    """
     date = datetime.now().strftime("%Y%m%d")
-
-    if not config.log_timestamp:
+    if not hasattr(config, 'log_timestamp') or not config.log_timestamp:
         config.log_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     timestamp = config.log_timestamp
 
@@ -477,41 +655,52 @@ def _export_table_to_tsv(df, config):
         current_user = sanitize_email(get_current_user())
         table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
         volume_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
-        create_folder_if_not_exists(f"{volume_path}/{current_user}/{date}/exportable_run_logs/")
-        output_file = f"{volume_path}/{current_user}/{date}/exportable_run_logs/review_metadata_{config.mode}_{timestamp}.tsv"
-                
-        if df.count() == 0:
+        export_folder = f"{volume_path}/{current_user}/{date}/exportable_run_logs/"
+        create_folder_if_not_exists(export_folder)
+        output_filename = f"review_metadata_{config.mode}_{config.log_timestamp}.xlsx"
+        output_file = f"{export_folder}{output_filename}"
+
+        if hasattr(df, 'count') and callable(df.count):
+            if df.count() == 0:
+                print("Warning: Table is empty")
+                logger.warning("Table is empty")
+        elif isinstance(df, pd.DataFrame) and df.empty:
             print("Warning: Table is empty")
-        
-        print(f"Writing to TSV file: {output_file}")
-        df.write.mode("append").saveAsTable(table_name)
-        output_df_pandas_to_tsv(df, output_file)
+            logger.warning("Table is empty")
+
+        if hasattr(df, 'toPandas') and callable(df.toPandas):
+            pdf = df.toPandas()
+        elif isinstance(df, pd.DataFrame):
+            pdf = df
+        else:
+            logger.error("Unsupported DataFrame type")
+            raise ExportError("Unsupported DataFrame type")
+
+        print(f"Writing to Excel file: {output_filename}")
+        logger.info(f"Writing to Excel file: {output_filename}")
+        export_df_to_excel(pdf, output_filename, export_folder)
 
         print("Export completed successfully")
-        return table_name
-        
+        logger.info("Export completed successfully")
+        return output_file
+
     except Exception as e:
         print(f"Error during full log export process: {str(e)}")
-        return False
+        logger.error(f"Error during full log export process: {str(e)}")
+        raise ExportError(f"Error during full log export process: {str(e)}")
 
-def output_df_pandas_to_tsv(df, output_file):
-    pandas_df = df.toPandas()
-    pandas_df.to_csv(output_file, 
-                    sep='\t',
-                    header=True,
-                    index=False,
-                    mode='a') 
 
 def log_metadata_generation(df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str) -> None:
     run_log_table_ddl(config)
-    print("df schema in log metadata generation", df.schema)
     df.write.mode('append').option("mergeSchema", "true").saveAsTable(f"{config.catalog_name}.{config.schema_name}.{config.mode}_metadata_generation_log")
     mark_as_deleted(table_name, config)
+
 
 def set_classification_to_null(df: DataFrame, config: MetadataConfig) -> DataFrame:
     if config.mode == "pi":
         df = df.withColumn("classification", lit(None))
     return df
+
 
 def set_protected_classification(df: DataFrame, config: MetadataConfig) -> DataFrame:
     if df is None:
@@ -567,6 +756,8 @@ def filter_and_write_ddl(df: DataFrame,
     ddl_statements = df.select("ddl").collect()
     table_name = re.sub(r'[^\w\s/]', '_', full_table_name)
     file_root = f"{table_name}_{config.mode}"
+    write_ddl_to_volume(file_root, base_path, ddl_statements, config.ddl_output_format)
+    df = df.withColumn("status", lit("Success"))
     try:
         write_ddl_to_volume(file_root, base_path, ddl_statements, config.ddl_output_format)
         df = df.withColumn("status", lit("Success"))
@@ -581,7 +772,13 @@ def filter_and_write_ddl(df: DataFrame,
         df = df.withColumn("status", lit("Failed: Unexpected error"))
     finally:
         log_metadata_generation(df, config, full_table_name, base_path)
-        _export_table_to_tsv(df, config)
+        if config.reviewable_output_format == "excel":
+            _export_table_to_excel(df, config)
+        elif config.reviewable_output_format == "tsv":
+            _export_table_to_tsv(df, config)
+        else:
+            raise ValueError("Invalid output format for reviewable_output_format. Please choose either 'excel' or 'tsv'.")
+
 
 def create_folder_if_not_exists(folder_path):
     """Creates a folder if it doesn't exist.
@@ -589,15 +786,24 @@ def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
+
 def write_ddl_to_volume(file_name, base_path, ddl_statements, output_format):
     try:
         create_folder_if_not_exists(base_path)
     except Exception as e:
         print(f"Error creating folder: {e}. Check if Volume exists and if your permissions are correct.")
-    full_path = os.path.join(base_path, f"{file_name}.{output_format}")
-    with open(full_path, "w") as file:
-        for statement in ddl_statements:
-            file.write(f"{statement[0]}\n")
+    if output_format in ['sql', 'tsv']:
+        full_path = os.path.join(base_path, f"{file_name}.{output_format}")
+        with open(full_path, "w") as file:
+            for statement in ddl_statements:
+                file.write(f"{statement[0]}\n")
+    elif output_format == "excel":
+        ddl_list = [row.ddl for row in ddl_statements]
+        df = pd.DataFrame(ddl_list, columns=['ddl'])
+        df_column_to_excel_file(df, file_name, base_path, 'ddl')
+    else:
+        raise ValueError("Invalid output format. Please choose either 'sql', 'tsv' or 'excel'.")
+
 
 def create_and_persist_ddl(df: DataFrame,
                            config: MetadataConfig,
@@ -618,14 +824,10 @@ def create_and_persist_ddl(df: DataFrame,
     current_date = datetime.now().strftime('%Y%m%d')
     if config.volume_name:
         base_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{current_user}/{current_date}"
-        print(f"Writing table and column DDL for {table_name}...")
         table_df = df[f'{config.mode}_table_df']
-        print("config_mode", f"{config.mode}")
-        print("Populate log schema for table", table_df.schema)
         table_df = populate_log_table(table_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         column_df = df[f'{config.mode}_column_df']
-        print("Populate log schema for table", table_df.schema)
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r'[^\w\s/]', '_', base_path)
         unioned_df = table_df.union(column_df)
@@ -642,7 +844,7 @@ def get_generated_metadata(
     full_table_name: str
     ) -> List[Tuple[PIResponse, CommentResponse]]:
     """
-    Generates metadata for a given table.
+    Generates metadata for a given table. Wraps get_generated_metadata_data_aware() to allow different handling when data is allowed versus disallowed. Currently no difference is implemented between the two routes, but in the future can be if needed.
 
     Args:
         catalog (str): The catalog name.
@@ -662,6 +864,7 @@ def get_generated_metadata(
         responses = get_generated_metadata_data_aware(spark, config, full_table_name)
     return responses
 
+
 def get_generated_metadata_data_aware(spark: SparkSession, config: MetadataConfig, full_table_name: str):
     df = spark.read.table(full_table_name)
     responses = []
@@ -672,7 +875,6 @@ def get_generated_metadata_data_aware(spark: SparkSession, config: MetadataConfi
         prompt = PromptFactory.create_prompt(config, sampled_chunk, full_table_name)
         prompt_messages = prompt.create_prompt_template()
         num_words = check_token_length_against_num_words(prompt_messages, config)
-        print("number of words in prompt:", num_words)
         if config.registered_model_name != "default":
             call_registered_model(config, prompt)
         else:
@@ -680,7 +882,6 @@ def get_generated_metadata_data_aware(spark: SparkSession, config: MetadataConfi
         response, payload = chat_response.get_responses(config, prompt_messages, prompt.prompt_content)
         responses.append(response)
     return responses
-
 
 
 def check_token_length_against_num_words(prompt: str, config: MetadataConfig):
@@ -694,9 +895,7 @@ def check_token_length_against_num_words(prompt: str, config: MetadataConfig):
         return num_words
 
 
-
 def call_registered_model(config: MetadataConfig):
-    ### TODO: Implement
     model_name = config.registered_model_name
     model_version = config.registered_model_version
     full_model_name = None
@@ -773,7 +972,6 @@ def apply_comment_ddl(df: DataFrame, config: MetadataConfig) -> None:
     ddl_statements = df.select("ddl").collect()
     for row in ddl_statements:
         ddl_statement = row["ddl"]
-        print(f"Executing DDL: {ddl_statement}")
         if not config.dry_run:
             spark.sql(ddl_statement)
 
@@ -817,19 +1015,17 @@ def split_name_for_df(df):
 def add_ddl_to_dfs(config, table_df, column_df, table_name):
     dfs = {}
     if config.mode == "comment":
-        print("tbale df comment from add ddl to dfs", table_df.schema)
         summarized_table_df = summarize_table_content(table_df, config, table_name)
         summarized_table_df = split_name_for_df(summarized_table_df)
-        print("summarized table df comment from add ddl to dfs", summarized_table_df.schema)
         dfs['comment_table_df'] = add_ddl_to_table_comment_df(summarized_table_df, "ddl")
-        print("column df comment from add ddl to dfs", column_df.schema)
         dfs['comment_column_df'] = add_ddl_to_column_comment_df(column_df, "ddl")
         if config.apply_ddl:
             apply_ddl_to_tables(dfs, config)
     elif config.mode == "pi":
         dfs['pi_column_df'] = add_column_ddl_to_pi_df(config, column_df, "ddl")
         table_df = create_pi_table_df(dfs['pi_column_df'], table_name)
-        dfs['pi_table_df']= set_protected_classification(table_df, config)
+        if table_df is not None:
+            dfs['pi_table_df']= set_protected_classification(table_df, config)
         if config.apply_ddl:
             apply_ddl_to_tables(dfs, config)
     else:
@@ -905,7 +1101,6 @@ def determine_table_classification(pi_rows: DataFrame) -> str:
         return "Unknown"
 
 
-# TODO move to Response class?
 def summarize_table_content(table_df, config, table_name):
     """Create a new completion class for this."""
     if table_df.count() > 1:
@@ -936,6 +1131,9 @@ def setup_ddl(config: MetadataConfig) -> None:
     print(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
+        review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_email(config.current_user)}/reviewed_outputs/"
+        if not os.path.exists(review_output_path):
+            os.mkdir(review_output_path)
 
 
 def create_tables(config: MetadataConfig) -> None:
@@ -1003,26 +1201,85 @@ def trim_whitespace_from_df(df: DataFrame) -> DataFrame:
         df = df.withColumn(col_name, trim(col(col_name)))
     return df
 
+class TableProcessingError(Exception):
+    """Custom exception for table processing failures."""
 
-def generate_and_persist_metadata(config) -> None:
+def generate_and_persist_metadata(config: Any) -> None:
     """
     Generates and persists comments for tables based on the provided setup and model parameters.
 
     Args:
-        config (MetadataConfig): Configuration object containing setup and model parameters.
+        config: Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
+    logger = logging.getLogger("metadata_processing")
+    logger.setLevel(logging.INFO)
+
     for table in config.table_names:
-        print(f"Processing table {table}...")
-        if not spark.catalog.tableExists(table):
-            print(f"Table {table} does not exist. Deleting from control table and skipping...")
-            logger.info(f"Table {table} does not exist. Deleting from control table and skipping...")            
-            mark_as_deleted(table, config)
-        else:
-            df = process_and_add_ddl(config, table)
-            print(f"Generating and persisting ddl for {table}...")
-            create_and_persist_ddl(df, config, table)
-        
+        log_dict = {}
+        try:
+            logger.info(f"[generate_and_persist_metadata] Processing table {table}...")
+
+            if not spark.catalog.tableExists(table):
+                msg = f"Table {table} does not exist. Deleting from control table and skipping..."
+                logger.warning(f"[generate_and_persist_metadata] {msg}")
+                mark_as_deleted(table, config)
+                log_dict = {
+                    "full_table_name": table,
+                    "status": "Table does not exist",
+                    "user": sanitize_email(config.current_user),
+                    "mode": config.mode,
+                    "apply_ddl": config.apply_ddl,
+                    "_updated_at": str(datetime.now()),
+                }
+            else:
+                df = process_and_add_ddl(config, table)
+                logger.info(f"[generate_and_persist_metadata] Generating and persisting ddl for {table}...")
+                create_and_persist_ddl(df, config, table)
+                log_dict = {
+                    "full_table_name": table,
+                    "status": "Table processed",
+                    "user": sanitize_email(config.current_user),
+                    "mode": config.mode,
+                    "apply_ddl": config.apply_ddl,
+                    "_updated_at": str(datetime.now()),
+                }
+
+        except TableProcessingError as tpe:
+            logger.error(f"[generate_and_persist_metadata] TableProcessingError for {table}: {tpe}")
+            log_dict = {
+                "full_table_name": table,
+                "status": f"Processing failed: {tpe}",
+                "user": sanitize_email(config.current_user),
+                "mode": config.mode,
+                "apply_ddl": config.apply_ddl,
+                "_updated_at": str(datetime.now()),
+            }
+            raise  # Optionally re-raise if you want to halt further processing
+
+        except Exception as e:
+            logger.error(
+                f"[generate_and_persist_metadata] Unexpected error for {table}: {e}\n{traceback.format_exc()}"
+            )
+            log_dict = {
+                "full_table_name": table,
+                "status": f"Processing failed: {e}",
+                "user": sanitize_email(config.current_user),
+                "mode": config.mode,
+                "apply_ddl": config.apply_ddl,
+                "_updated_at": str(datetime.now()),
+            }
+            raise
+
+        finally:
+            try:
+                write_to_log_table(log_dict, f"{config.catalog_name}.{config.schema_name}.table_processing_log")
+                logger.info(f"[generate_and_persist_metadata] Log written for table {table}.")
+            except Exception as log_err:
+                logger.error(
+                    f"[generate_and_persist_metadata] Failed to write log for {table}: {log_err}\n{traceback.format_exc()}"
+                )
+            print(f"Finished processing table {table} and writing to log table.")
 
 
 def setup_queue(config: MetadataConfig) -> List[str]:
@@ -1043,7 +1300,8 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     if spark.catalog.tableExists(control_table):
         control_df = spark.sql(f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL""")
         queued_table_names = {row["table_name"] for row in control_df.collect()}
-    config_table_names = config.table_names
+    config_table_string = config.table_names
+    config_table_names = [name.strip() for name in config_table_string.split(',') if len(name.strip()) > 0]
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(set().union(queued_table_names, config_table_names, file_table_names))
     combined_table_names = ensure_fully_scoped_table_names(combined_table_names, config.catalog_name)
@@ -1154,7 +1412,7 @@ def generate_table_comment_ddl(full_table_name: str, comment: str) -> str:
     Returns:
         str: The DDL statement for adding the
     """
-    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
+    ddl_statement = f"""COMMENT ON TABLE {full_table_name} IS "{cleanse_sql_comment(comment)}";"""
     return ddl_statement
 
 
@@ -1170,7 +1428,7 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{comment}";"""
+    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
     return ddl_statement
 
 
