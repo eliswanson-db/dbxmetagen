@@ -64,7 +64,7 @@ def load_metadata_file(file_path: str, file_type: str) -> pd.DataFrame:
         if file_type == 'tsv':
             df = pd.read_csv(file_path, sep='\t', dtype=str)
         elif file_type == 'excel':
-            df = pd.read_excel(file_path, dtype=str)
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
         logging.info(f"Loaded file: {file_path}")
@@ -113,11 +113,21 @@ def replace_comment_in_ddl(ddl: str, new_comment: str) -> str:
             ddl
         )
     else:
-        ddl = re.sub(
-            r'(ALTER TABLE [^"\']+ COMMENT ON COLUMN [^ ]+ IS\s+)(["\'])(.*?)(["\'])',
-            lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-            ddl
-        )
+        dbr_number = os.environ.get('DATABRICKS_RUNTIME_VERSION')
+        if float(dbr_number) >= 16:
+            ddl = re.sub(
+                r'(ALTER TABLE [^"\']+ COMMENT ON COLUMN [^ ]+ IS\s+)(["\'])(.*?)(["\'])',
+                lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
+                ddl
+            )
+        elif float(dbr_number) >=14 and float(dbr_number) < 16:
+            ddl = re.sub(
+                r'(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ COMMENT\s+)(["\'])(.*?)(["\'])',
+                lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
+                ddl
+            )
+        else: 
+            raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")            
     return ddl
 
 def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: str) -> str:
@@ -163,6 +173,15 @@ def update_ddl_row(mode: str, reviewed_column: str, row: pd.Series) -> Union[str
     else:
         raise ValueError("Unknown mode")
 
+
+def check_file_type(file_name: str, config: MetadataConfig) -> None:
+    if file_name.endswith('.xlsx') and config.review_input_file_type != 'excel':
+        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
+    elif file_name.endswith('.tsv') and config.review_input_file_type != 'tsv':
+        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
+    else:
+        return True
+    
 
 def export_metadata(
     df: pd.DataFrame,
@@ -233,7 +252,7 @@ def extract_ddls_from_file(file_path: str, file_type: str) -> list:
             ddls = [ddl.strip() for ddl in content.split(';') if ddl.strip()]
     elif file_type in ('excel', 'tsv'):
         if file_type == 'excel':
-            df = pd.read_excel(file_path, dtype=str)
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
         else:
             df = pd.read_csv(file_path, sep='\t', dtype=str)
         if 'ddl' in df.columns:
@@ -270,23 +289,6 @@ def apply_ddl_to_databricks(sql_file: str, config: MetadataConfig, file_type: st
         raise
 
 
-def get_mode(
-    filename: str
-) -> str:
-    """
-    Determine the mode based on the environment.
-
-    Returns:
-        str: 'pi' or 'comment'.
-    """
-    if 'pi' in filename:
-        return 'pi' 
-    elif 'comment' in filename:
-        return 'comment'
-    else:
-        raise ValueError("Invalid mode. Must be either 'pi' or 'comment'.")
-
-
 def process_metadata_file(
     config: MetadataConfig,
     input_file: str,
@@ -300,6 +302,7 @@ def process_metadata_file(
         input_file (str): Path to the input file.
         export_format (Optional[str]): 'sql', 'tsv', or 'excel'. If None, uses config.
     """
+    file_check = check_file_type(input_file, config)
     try:
         sanitized_email = sanitize_email(config.current_user)
         current_date = datetime.now().strftime("%Y%m%d")

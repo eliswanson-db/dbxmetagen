@@ -253,9 +253,9 @@ Put the file you want to review in 'reviewed_outputs' folder in your user folder
 
 ## Current Status
 
-- Tested on DBR 16.4 ML LTS, bumped the version to allow views to be run.
-- Default: Generates `ALTER TABLE` scripts, stores in a volume.
-- Print-based logging for debugging and transparency.
+- Tested on DBR 16.4 LTS, 14.3 LTS, and 15.4 LTS, as well as the ML versions.
+- Views only work on 16.4. Pre-16.4, alternative DDL is used.
+- Excel writes for metadata generator or sync_reviewed_ddl only work on ML runtimes. If you must use a standard runtime, leverage tsv.
 
 ## Discussion Points & Recommendations
 
