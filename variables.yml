@@ -10,13 +10,13 @@ variables:
     default: true
   sample_size:
     description: Sample size used per chunk in the prompt generation. when set to 0, no data will be sent to LLM, but due to leakage from metadata if this field alone is set, does not prevent data being added to comments.
-    default: 5
+    default: 10
   disable_medical_information_value:
     description: Set this to true if you want all phi assumptions to be as secure as possible. Under this setting there is no 'medical information' category. Instead, all medical information is converted to PHI. Note that this will mean that any downstream masking you do, and security concerns around your data will be much more stringent.
     default: true
   allow_data_in_comments:
     description: Whether to allow data in comments. Note that this does not prevent data from being used in the inputs, but is meant to keep data from the outputs. These comments still need to be reviewed, and to be 100% sure, either set allow_data to false, or set your combination of add_metadata, include_existing_table_comment, and other fields to the proper settings.
-    default: false
+    default: true
   add_metadata:
     description: Whether to use metadata from information schema and from a DESCRIBE EXTENDED ... COMPUTE STATISTICS... on each column or not. The most information will be used if ANALYZE ALL COLUMNS ... COMPUTE STATISTICS... is run on the table, but there are good reasons not to do that, please review the considerations. Setting add_metadata to true will also lead to a slower process. Note that some metadata can in theory leak data, such as min or max. Strings don't have values for min or max, but dates, floats, and integers do.
     default: true
@@ -37,7 +37,7 @@ variables:
     default: false 
   model:
     description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision. 
-    default: databricks-meta-llama-3-3-70b-instruct
+    default: databricks-claude-3-7-sonnet
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
@@ -143,13 +143,13 @@ variables:
     default: default
   review_input_file_type:
     description: excel or tsv. allows reviewed DDL to be in either format.
-    default: tsv
+    default: excel
   review_output_file_type:
     description: sql, excel, or tsv. allows reviewed DDL to be exported in either format.
-    default: tsv
+    default: excel
   review_apply_ddl:
     description: When running 'sync_reviewed_ddl', if this is set to true, the DDL will all be applied after running.
-    default: true
+    default: false
   column_with_reviewed_ddl:
     description: When reviewing content and supplying it back to the sync process, do not modify the DDL column, modify the columns 'column_content' or 'type' and 'classification'. For the alternative column the specified option should just be 'other'. We will add an option to modify the DDL in a future release.
     default: other
