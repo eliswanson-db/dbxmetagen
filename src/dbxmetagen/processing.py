@@ -1429,7 +1429,13 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
+    dbr_number = os.environ.get('DATABRICKS_RUNTIME_VERSION')
+    if float(dbr_number) >= 16:
+        ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
+    elif float(dbr_number) >=14 and float(dbr_number) <= 15:
+        ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{cleanse_sql_comment(comment)}";"""
+    else: 
+        raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")
     return ddl_statement
 
 
