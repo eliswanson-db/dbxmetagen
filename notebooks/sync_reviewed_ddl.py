@@ -27,9 +27,12 @@ os.environ["DATABRICKS_TOKEN"] = (
 )
 dbutils.widgets.text("reviewed_file_name", "")
 file_name = dbutils.widgets.get("reviewed_file_name")
+dbutils.widgets.text("mode", "comment")
+mode = dbutils.widgets.get("mode")
 review_variables = {
     "reviewed_file_name": file_name,
     "current_user": current_user,
+    "mode": mode
 }
 
 # COMMAND ----------
@@ -43,3 +46,7 @@ def main(kwargs, input_file):
 # COMMAND ----------
 
 main(review_variables, file_name)
+
+# COMMAND ----------
+
+
