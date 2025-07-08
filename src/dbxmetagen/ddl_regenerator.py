@@ -127,13 +127,13 @@ def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: st
     if "ALTER COLUMN" not in ddl:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     return ddl
@@ -231,8 +231,8 @@ def extract_ddls_from_file(file_path: str, file_type: str) -> list:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
             ddls = [ddl.strip() for ddl in content.split(';') if ddl.strip()]
-    elif file_type in ('xlsx', 'tsv'):
-        if file_type == 'xlsx':
+    elif file_type in ('excel', 'tsv'):
+        if file_type == 'excel':
             df = pd.read_excel(file_path, dtype=str)
         else:
             df = pd.read_csv(file_path, sep='\t', dtype=str)
@@ -309,17 +309,16 @@ def process_metadata_file(
         )
         output_dir = os.path.join(
             "/Volumes", config.catalog_name, config.schema_name,
-            "generated_metadata", sanitized_email, current_date
+            "generated_metadata", sanitized_email, current_date, "exportable_run_logs"
         )
         input_file_type = config.review_input_file_type
         output_file_type = export_format or config.review_output_file_type 
         df = load_metadata_file(os.path.join(input_dir, input_file), input_file_type)
-        mode = get_mode(input_file)
-        if mode == 'pi':
+        if config.mode == 'pi':
             df[['classification', 'type', 'ddl']] = df.apply(
                 lambda row: update_ddl_row('pi', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
             )
-        elif mode == 'comment':
+        elif config.mode == 'comment':
             df[['column_content', 'ddl']] = df.apply(
                 lambda row: update_ddl_row('comment', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
             )

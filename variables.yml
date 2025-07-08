@@ -43,10 +43,10 @@ variables:
     default: default.simple_test
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
-    default: true
+    default: false
   ddl_output_format:
     description: Output format can be via sql file (default) or via tsv or excel if this improves reviewability. This file is the individual output files.
-    default: sql
+    default: excel
   reviewable_output_format:
     description: Desired format for full run output for reviewability. tsv or excel 
     default: excel
@@ -149,8 +149,7 @@ variables:
     default: excel
   review_apply_ddl:
     description: When running 'sync_reviewed_ddl', if this is set to true, the DDL will all be applied after running.
-    default: true
+    default: false
   column_with_reviewed_ddl:
     description: When reviewing content and supplying it back to the sync process, should the DDL column be reviewed and modified, or the other columns - column_content for comments, and classification/type for pi identification. For ddl, the option should be 'ddl'. For the alternative column the specified option should just be 'other'.
-    default: other
-  
+    default: ddl
