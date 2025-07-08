@@ -622,9 +622,10 @@ def export_df_to_excel(df: pd.DataFrame, output_file: str, export_folder: str) -
         local_path = f"/local_disk0/tmp/{output_file}"
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         if not os.path.exists(local_path):
-            pd.DataFrame().to_excel(local_path)
-        with pd.ExcelWriter(local_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-            df.to_excel(writer, sheet_name='Sheet1', startrow=writer.sheets['Sheet1'].max_row, header=False, index=False)
+            df.to_excel(local_path, index=False)
+        else:
+            with pd.ExcelWriter(local_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                df.to_excel(writer, sheet_name='Sheet1', startrow=writer.sheets['Sheet1'].max_row, header=False, index=False)
         copyfile(local_path, os.path.join(export_folder, output_file))
         logger.info(f"Excel file created at: {output_file}")
     except Exception as e:

@@ -190,6 +190,11 @@ If a table has columns with both PII and PHI, or with PII and medical informatio
 - **volume_name:** Specifies where generated files are stored.
 - **apply_ddl, review_apply_ddl:** Control whether DDL is applied directly or only generated for review.
 
+Each run will export an 'exportable run log' to a folder named the same. This run log can be TSV or Excel, and will include every table that was run during that run. 
+Exportable run logs can be modified and input to the review process. Do this by checking the variables 'review_input_file_type', 'review_output_file_type', 'review_apply_ddl', and 'column_with_reviewed_ddl' and setting them to desired values. Note that 'review_apply_ddl' will apply ddl to tables. 
+
+Put the file you want to review in 'reviewed_outputs' folder in your user folder and put the filename in the sync_reviewed_ddl notebook widget, and run the notebook. A file will be updated and output.
+
 ### Model and Prompt Tuning
 
 - **model, temperature, max_prompt_length, max_tokens, columns_per_call:** Tune LLM endpoint and prompt parameters for desired output quality and performance.
