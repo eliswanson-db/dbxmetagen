@@ -38,6 +38,7 @@ sys.path.append('../')
 # COMMAND ----------
 
 import os
+import json
 from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
@@ -52,6 +53,7 @@ from src.dbxmetagen.main import main
 
 # COMMAND ----------
 
+dbutils.widgets.dropdown("cleanup_control_table", "false", ["true", "false"])
 dbutils.widgets.dropdown("mode", "comment", ["comment", "pi"])
 dbutils.widgets.text("env", "")
 dbutils.widgets.text("table_names", "")
@@ -61,12 +63,18 @@ dbutils.widgets.text("table_names", "")
 table_names = dbutils.widgets.get("table_names")
 mode = dbutils.widgets.get("mode")
 env = dbutils.widgets.get("env")
+cleanup_control_table = dbutils.widgets.get("cleanup_control_table")
+context_json = dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson()
+context = json.loads(context_json)
+job_id = context.get("tags", {}).get("jobId", None)
 current_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
 notebook_variables = {
     "table_names": table_names,
     "mode": mode,
     "env": env,
     "current_user": current_user,
+    "cleanup_control_table": cleanup_control_table,
+    "job_id": job_id
 }
 api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 os.environ["DATABRICKS_TOKEN"]=api_key
