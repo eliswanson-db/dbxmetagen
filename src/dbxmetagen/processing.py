@@ -377,7 +377,7 @@ def ensure_directory_exists(directory_path: str) -> None:
     """
     try:
         if not os.path.exists(directory_path):
-            os.makedirs(directory_path)
+            os.mkdir(directory_path)
             logger.info(f"Created directory: {directory_path}")
     except Exception as e:
         logger.error(f"Failed to create directory {directory_path}: {e}")
@@ -442,6 +442,25 @@ def populate_log_table(df, config, current_user, base_path):
             )
     
 
+def get_control_table(config: MetadataConfig) -> str:
+    """
+    Returns the control table name based on the provided configuration.
+
+    Args:
+        config (MetadataConfig): Configuration object containing setup and model parameters.
+
+    Returns:
+        str: The control table name.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    if config.job_id and config.cleanup_control_table == "true":
+        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))+str(config.job_id)
+    else:
+        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    return formatted_control_table
+
+
+
 def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     """
     Updates the _deleted_at and _updated_at columns to the current timestamp for the specified table.
@@ -451,7 +470,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     update_query = f"""
     UPDATE {control_table}
@@ -1133,8 +1152,8 @@ def setup_ddl(config: MetadataConfig) -> None:
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
         review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_email(config.current_user)}/reviewed_outputs/"
-        if not os.path.exists(review_output_path):
-            os.mkdir(review_output_path)
+        os.makedirs(review_output_path, exist_ok=True)
+
 
 
 def create_tables(config: MetadataConfig) -> None:
@@ -1148,8 +1167,8 @@ def create_tables(config: MetadataConfig) -> None:
             - control_table (str): The destination table used for tracking table queue.
     """
     spark = SparkSession.builder.getOrCreate()
-    if config.control_table:
-        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    if config.control_table:        
+        formatted_control_table = get_control_table(config)
         logger.info("Formatted control table...", formatted_control_table)
         spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{formatted_control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
@@ -1295,7 +1314,7 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
@@ -1342,7 +1361,7 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print(f"Upserting table names to control table {table_names}...")
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     table_names = ensure_fully_scoped_table_names(table_names, config.catalog_name)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])

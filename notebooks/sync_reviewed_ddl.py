@@ -41,7 +41,7 @@ review_variables = {
 def main(kwargs, input_file):
     spark_version = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
     config = MetadataConfig(**kwargs)
-    if 'ml' not in spark_version and 'excel' in (config.ddl_output_format, config.review_output_file_type,config.review_input_file_type, config.reviewable_output_format):
+    if 'ml' not in spark_version and 'excel' in (config.review_input_file_type, config.reviewable_output_format):
         raise ValueError("Excel writes in dbxmetagen are not supported on standard runtimes. Please change your output file type to tsv or sql if appropriate.")
     process_metadata_file(config, input_file)
 
