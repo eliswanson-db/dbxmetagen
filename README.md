@@ -247,14 +247,15 @@ Put the file you want to review in 'reviewed_outputs' folder in your user folder
 
 ### 6. Output Review and Export
 
-- **Reviewable outputs** are exported in the desired format (Excel/TSV/SQL), and can be re-imported for DDL application if `review_apply_ddl` is enabled.
-- **Export utilities** ensure directories are created as needed, and output files are validated post-write.
-
+- **Reviewable outputs** are exported in the desired format (Excel/TSV/SQL), and can be re-imported for DDL application if `review_apply_ddl` is enabled. 
+- **Syncing reviewed outputs** Put reviewed 'exportable_run_log' into the 'reviewed_outputs' folder, update any review variables such as input and output format in variables.yml, add the file name to the file_name widget in the sync notebook and run the notebook. 
+- **Export utilities** ensure directories are created as needed, and output files are validated post-write. Note that if DDL is generated on one DBR, such as 16.4, you may be unable to apply it with other DBRs, such as 14.3. This is a common source of user error.
+- **Modify** Modify the 'column_content' column for comments, or the 'type' and 'classification' columns for PI classification. Set your options for review, including review_input_file_type, review_output_file_type, and review_apply_ddl.
 
 ## Current Status
 
 - Tested on DBR 16.4 LTS, 14.3 LTS, and 15.4 LTS, as well as the ML versions.
-- Views only work on 16.4. Pre-16.4, alternative DDL is used.
+- Views only work on 16.4. Pre-16.4, alternative DDL is used that only works on tables.
 - Excel writes for metadata generator or sync_reviewed_ddl only work on ML runtimes. If you must use a standard runtime, leverage tsv.
 
 ## Discussion Points & Recommendations
@@ -281,7 +282,6 @@ Put the file you want to review in 'reviewed_outputs' folder in your user folder
 
 - Prompt registration and model evaluation using agent evals.
 - Support for multiple spaCy models and custom PI column field names.
-- Add ALTER COLUMNS support
 
 ## License
 
