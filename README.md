@@ -65,6 +65,9 @@ Strongly recommend reviewing all the options before using, there are a variety o
 1. Set the widget for comment or pi and run the notebook.
 1. Update notebooks/table_names.csv
 
+### No workspace files setup
+1. Follow minimal setup guidelines, but move all files in configuration_files folder to a volume that you have access to.
+
 ### Setup
 1. Clone the Repo into Databricks or locally
 1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster (tested on 14.3 ML LTS, 15.4 ML LTS, 16.2 ML) without further deployment, simply adjusting variables.yml and widgets in the notebook.
