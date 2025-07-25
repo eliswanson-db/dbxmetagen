@@ -28,6 +28,12 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 
 **dbxmetagen** is a utility for generating high-quality descriptions for tables and columns in Databricks, enhancing enterprise search, governance, and Databricks Genie performance. It can identify and classify personal information (PI) into PII, PHI, and PCI. The tool is highly configurable, supporting bulk operations, SDLC integration, and fine-grained control over privacy and output formats.
 
+Quickstart or demo run
+1. Clone the repo into a Git Folder in Databricks.
+2. Update host and catalog name in `variables.yml`. Make sure the catalog exists.
+3. Update `notebooks/table_names.csv` - what tables do you want to generate comments, or identify PII and PHI for?
+4. Set notebook widget for comment or PI mode and run the notebook.
+
 ## Disclaimer
 
 - **AI-generated comments must be human-reviewed.**
@@ -129,13 +135,6 @@ Strongly recommend reviewing all the options before using, there are a variety o
 1. Larger chunks will result in simpler comments with less creativity and elaboration.
 1. Remember that PPT endpoints (the default) are not HIPAA compliant, you are responsible for setting up appropriate endpoints for your security needs.
 1. For 'pi' mode, the recommendation is to potentially use more rows of data, and smaller chunks given that scanning the data is important for identifying PI.
-
-
-1. Clone the repo into Databricks (Git Folder or Workspace).
-2. Update `variables.yml` (host, catalog_name, etc.).
-3. Update `notebooks/table_names.csv`.
-4. Set notebook widget for comment or PI mode and run the notebook.
-
 
 ## Full Setup Instructions
 
