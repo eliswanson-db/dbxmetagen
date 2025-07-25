@@ -28,7 +28,18 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 
 **dbxmetagen** is a utility for generating high-quality descriptions for tables and columns in Databricks, enhancing enterprise search, governance, and Databricks Genie performance. It can identify and classify personal information (PI) into PII, PHI, and PCI. The tool is highly configurable, supporting bulk operations, SDLC integration, and fine-grained control over privacy and output formats.
 
-Quickstart or demo run
+**Quickstart Options**
+
+### Option 1: Streamlit App (Recommended for Business Users)
+DBX MetaGen includes a production-quality Streamlit app with an intuitive web interface:
+
+1. **Deploy the app**: `./deploy_app.sh`
+2. **Access through Databricks workspace** under Apps
+3. **Configure and run** through the web interface
+
+See [`app/README.md`](app/README.md) for detailed app documentation.
+
+### Option 2: Traditional Notebooks (For Technical Users)
 1. Clone the repo into a Git Folder in Databricks.
 2. Update host and catalog name in `variables.yml`. Make sure the catalog exists.
 3. Update `notebooks/table_names.csv` - what tables do you want to generate comments, or identify PII and PHI for?
