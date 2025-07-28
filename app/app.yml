@@ -1,0 +1,13 @@
+command: [
+  "streamlit", 
+  "run",
+  "app.py"
+]
+
+env:
+  - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+    value: "false"
+  - name: DATABRICKS_HOST
+    valueFrom: "host"
+  - name: DATABRICKS_TOKEN
+    valueFrom: "databricks_token"

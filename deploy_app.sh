@@ -11,8 +11,34 @@ echo "====================================="
 # Check if databricks CLI is installed
 if ! command -v databricks &> /dev/null; then
     echo "❌ Databricks CLI not found. Please install it first:"
-    echo "   pip install databricks-cli"
+    echo "   curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh"
+    echo "   For more details: https://docs.databricks.com/en/dev-tools/cli/install.html"
     exit 1
+fi
+
+# Check CLI version compatibility
+CLI_VERSION=$(databricks version 2>/dev/null | head -1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "0.0.0")
+echo "📋 Databricks CLI version: $CLI_VERSION"
+
+# Convert version to comparable number (major.minor.patch -> major*10000 + minor*100 + patch)
+version_to_number() {
+    echo "$1" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}'
+}
+
+MIN_VERSION="0.234.0"
+CLI_VERSION_NUM=$(version_to_number "$CLI_VERSION")
+MIN_VERSION_NUM=$(version_to_number "$MIN_VERSION")
+
+if [ "$CLI_VERSION_NUM" -lt "$MIN_VERSION_NUM" ]; then
+    echo "⚠️  Warning: Databricks CLI version $CLI_VERSION detected."
+    echo "   This script requires version $MIN_VERSION or higher for proper functionality."
+    echo "   Please update your CLI: https://docs.databricks.com/en/dev-tools/cli/install.html"
+    echo ""
+    read -p "Continue anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
 fi
 
 # Check if we're in the right directory
@@ -53,7 +79,7 @@ create_secret_scope() {
     fi
     
     # Check if token secret exists
-    if databricks secrets list --scope "$scope_name" | grep -q "databricks_token"; then
+    if databricks secrets list-secrets "$scope_name" 2>/dev/null | grep -q "databricks_token"; then
         echo "✅ Token secret already configured"
     else
         echo "🔐 Please enter your Databricks token for the app:"
@@ -62,11 +88,16 @@ create_secret_scope() {
         echo
         
         if [ -n "$token" ]; then
-            echo "$token" | databricks secrets put --scope "$scope_name" --key "databricks_token"
+            # Use the new CLI format with JSON input
+            databricks secrets put-secret --json "{
+                \"scope\": \"$scope_name\",
+                \"key\": \"databricks_token\", 
+                \"string_value\": \"$token\"
+            }"
             echo "✅ Token secret configured"
         else
             echo "⚠️  No token provided. You'll need to configure this manually later:"
-            echo "   databricks secrets put --scope $scope_name --key databricks_token"
+            echo "   databricks secrets put-secret --json '{\"scope\": \"$scope_name\", \"key\": \"databricks_token\", \"string_value\": \"YOUR_TOKEN\"}'"
         fi
     fi
 }
@@ -143,7 +174,7 @@ show_troubleshooting() {
     echo ""
     echo "2. **Secret scope issues:**"
     echo "   databricks secrets create-scope dbxmetagen"
-    echo "   databricks secrets put --scope dbxmetagen --key databricks_token"
+    echo "   databricks secrets put-secret --json '{\"scope\": \"dbxmetagen\", \"key\": \"databricks_token\", \"string_value\": \"YOUR_TOKEN\"}'"
     echo ""
     echo "3. **Bundle validation errors:**"
     echo "   databricks bundle validate"
@@ -164,18 +195,28 @@ main() {
     create_secret_scope
     echo ""
     
-    # Step 2: Validate bundle
+    # Step 2: Copy configuration to app folder
+    echo "📋 Copying configuration files to app folder..."
+    if [ -f "variables.yml" ]; then
+        cp variables.yml app/
+        echo "✅ variables.yml copied to app folder"
+    else
+        echo "⚠️  variables.yml not found, app will use default configuration"
+    fi
+    echo ""
+    
+    # Step 3: Validate bundle
     validate_bundle
     echo ""
     
-    # Step 3: Deploy bundle
+    # Step 4: Deploy bundle
     deploy_bundle
     echo ""
     
-    # Step 4: Show success information
+    # Step 5: Show success information
     show_app_info
     
-    # Step 5: Show troubleshooting info
+    # Step 6: Show troubleshooting info
     show_troubleshooting
     
     echo ""

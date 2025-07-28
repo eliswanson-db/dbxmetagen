@@ -1,7 +1,7 @@
 # DBX MetaGen App Configuration
 app:
   title: "DBX MetaGen"
-  description: "AI-Powered Metadata Generation for Databricks Tables"
+  description: "AI-Powered Metadata Generation, Identification, and Classification for Databricks"
   version: "1.0.0"
   
 # Default job configuration  

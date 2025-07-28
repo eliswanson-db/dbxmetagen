@@ -26,3 +26,12 @@ repos:
         files: ^(pyproject\.toml|poetry\.lock)$
         language: python
         additional_dependencies: ["poetry==2.0.1", "poetry-plugin-export==1.9.0"]
+
+  - repo: local
+    hooks:
+      - id: copy-variables-to-app
+        name: Copy variables.yml to app folder
+        entry: bash -c 'cp variables.yml app/variables.yml && git add app/variables.yml'
+        language: system
+        files: ^variables\.yml$
+        pass_filenames: false

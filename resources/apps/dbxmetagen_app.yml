@@ -6,35 +6,12 @@ resources:
       
       source_code_path: ../../app
       
-      config:
-        command:
-          - "python"
-          - "-m"
-          - "streamlit"
-          - "run"
-          - "app.py"
-          - "--server.port=8501"
-          - "--server.address=0.0.0.0"
-          - "--server.headless=true"
-          - "--server.enableCORS=false"
-          - "--server.enableWebsocketCompression=false"
-
       permissions:
         - user_name: ${var.current_user}
           level: CAN_MANAGE
-        
-      resources:
-        - name: "cpu"
-          value: "1"
-        - name: "memory" 
-          value: "2Gi"
         
       env:
         - name: "DATABRICKS_HOST"
           value: ${var.host}
         - name: "DATABRICKS_TOKEN"
-          value: "{{secrets/dbxmetagen/databricks_token}}"  # Configure this secret
-        
-      secrets:
-        - key: "databricks_token"
-          scope: "dbxmetagen" 
+          value: "{{secrets/dbxmetagen/databricks_token}}"

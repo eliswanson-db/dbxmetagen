@@ -31,7 +31,12 @@ Create a Databricks secret scope and token:
 databricks secrets create-scope dbxmetagen
 
 # Add your Databricks token 
-databricks secrets put --scope dbxmetagen --key databricks_token
+databricks secrets put-secret --json '{"scope": "dbxmetagen", "key": "databricks_token", "string_value": "YOUR_TOKEN_HERE"}'
+```
+
+**Note**: This requires Databricks CLI version 0.234 or higher. If you're using an older version, please update:
+```bash
+curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 ```
 
 ### 3. Access the App
