@@ -132,9 +132,7 @@ variables:
   current_working_directory:
     description: Working directory or bundle root.
     default: /Users/${var.current_user}/.bundle/${bundle.name}/${bundle.target}
-  serverless_warehouse_id:
-    description: Serverless warehouse ID for SQL tasks. Replace with your warehouse ID.
-    default: ""
+
   control_table:
     description: Control table name.
     default: "metadata_control_{}"

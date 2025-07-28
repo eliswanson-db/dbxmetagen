@@ -13,23 +13,22 @@ resources:
         - name: catalog_name
           default: ${var.catalog_name}
         - name: app_service_principal
-          default: "dbxmetagen-app"  # This should match the service principal name
+          default: "dbxmetagen-app" 
 
       tasks:
         - task_key: setup_permissions
+          job_cluster_key: serverless_cluster
           sql_task:
             file:
               path: ../../app/setup_permissions.sql
             parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
               app_service_principal: "{{job.parameters.app_service_principal}}"
-            warehouse_id: ${var.serverless_warehouse_id}
           
-      # Run this job once on setup - can be triggered manually or via deployment
       schedule:
-        quartz_cron_expression: "0 0 0 ? * * *"  # Never run automatically
+        quartz_cron_expression: "0 0 0 ? * * *"
         timezone_id: "UTC"
-        pause_status: "PAUSED"  # Job is paused by default
+        pause_status: "PAUSED"
 
       max_concurrent_runs: 1
-      timeout_seconds: 600  # 10 minutes timeout 
+      timeout_seconds: 600

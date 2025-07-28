@@ -26,16 +26,11 @@ databricks bundle deploy
 
 The app uses service principal authentication and requires permissions to be set up:
 
-1. **Update variables.yml** with your serverless warehouse ID:
-   ```yaml
-   serverless_warehouse_id:
-     default: "your_actual_warehouse_id"
-   ```
-
-2. **Run the permissions setup job** (deployed with the app):
+1. **Run the permissions setup job** (deployed with the app):
    - Go to Workflows in your Databricks workspace
    - Find the `dbxmetagen_permissions_setup` job
    - Run it once to grant necessary permissions to the app service principal
+   - The job uses serverless compute, so no warehouse configuration is needed
 
 **Note**: The app uses M2M OAuth authentication, so no tokens are needed. The service principal permissions are handled automatically by the asset bundle.
 
