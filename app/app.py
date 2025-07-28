@@ -131,9 +131,9 @@ class DBXMetaGenApp:
 
         # Core Settings
         with st.sidebar.expander("🏗️ Core Settings", expanded=True):
-            config["catalog_name"] = st.text_input(
-                "Catalog Name",
-                value=config.get("catalog_name", "dbxmetagen"),
+                        config["catalog_name"] = st.text_input(
+                "Catalog Name", 
+                value=config.get("catalog_name", ""),
                 help="Target catalog where data, models, and files are stored",
             )
 
@@ -145,43 +145,49 @@ class DBXMetaGenApp:
 
             config["schema_name"] = st.text_input(
                 "Schema Name",
-                value=config.get("schema_name", "metadata_results"),
+                value=config.get("schema_name", ""),
                 help="Schema where results will be stored",
             )
 
         # Data Settings
         with st.sidebar.expander("📊 Data Settings"):
-            config["allow_data"] = st.checkbox(
-                "Allow Data in Processing",
-                value=config.get("allow_data", True),
+                        config["allow_data"] = st.checkbox(
+                "Allow Data in Processing", 
+                value=config.get("allow_data", False),
                 help="Set to false to prevent data from being sent to LLMs",
             )
 
-            config["sample_size"] = st.number_input(
-                "Sample Size",
-                min_value=0,
-                max_value=50,
-                value=config.get("sample_size", 5),
+                        config["sample_size"] = st.number_input(
+                "Sample Size", 
+                min_value=0, 
+                max_value=50, 
+                value=config.get("sample_size", 0),
                 help="Number of data samples per column for analysis",
             )
 
+            mode_options = ["comment", "pi", "both"]
+            current_mode = config.get("mode", "comment")
+            mode_index = mode_options.index(current_mode) if current_mode in mode_options else 0
             config["mode"] = st.selectbox(
                 "Processing Mode",
-                options=["comment", "pi", "both"],
-                index=["comment", "pi", "both"].index(config.get("mode", "comment")),
+                options=mode_options,
+                index=mode_index,
                 help="Mode of operation: generate comments, identify PII, or both",
             )
 
         # Advanced Settings
         with st.sidebar.expander("🔧 Advanced Settings"):
+            model_options = [
+                "databricks-claude-3-7-sonnet",
+                "databricks-meta-llama-3-3-70b-instruct", 
+                "databricks-claude-3-5-sonnet",
+            ]
+            current_model = config.get("model", "")
+            model_index = model_options.index(current_model) if current_model in model_options else 0
             config["model"] = st.selectbox(
                 "LLM Model",
-                options=[
-                    "databricks-claude-3-7-sonnet",
-                    "databricks-meta-llama-3-3-70b-instruct",
-                    "databricks-claude-3-5-sonnet",
-                ],
-                index=0,
+                options=model_options,
+                index=model_index,
                 help="LLM model for metadata generation",
             )
 
@@ -195,7 +201,7 @@ class DBXMetaGenApp:
                 "Model Temperature",
                 min_value=0.0,
                 max_value=1.0,
-                value=config.get("temperature", 0.1),
+                value=float(config.get("temperature", 0.1)),
                 step=0.1,
                 help="Model creativity level (0.0 = deterministic, 1.0 = creative)",
             )
@@ -447,40 +453,22 @@ class DBXMetaGenApp:
                 }
                 workers = worker_map[cluster_size]
 
-                # Prepare parameters from current app configuration
+                # Prepare base job parameters
                 job_parameters = {
                     "table_names": ",".join(tables),
-                    "mode": st.session_state.config.get("mode", "comment"),
                     "env": "app",
                     "cleanup_control_table": "true",
                 }
 
-                # Add other config parameters that the notebook can use
-                config_params = {
-                    "catalog_name": st.session_state.config.get(
-                        "catalog_name", "dbxmetagen"
-                    ),
-                    "allow_data": str(
-                        st.session_state.config.get("allow_data", True)
-                    ).lower(),
-                    "sample_size": str(st.session_state.config.get("sample_size", 5)),
-                    "apply_ddl": str(
-                        st.session_state.config.get("apply_ddl", False)
-                    ).lower(),
-                    "model": st.session_state.config.get(
-                        "model", "databricks-claude-3-7-sonnet"
-                    ),
-                    "temperature": str(st.session_state.config.get("temperature", 0.1)),
-                    "schema_name": st.session_state.config.get(
-                        "schema_name", "metadata_results"
-                    ),
-                    "volume_name": st.session_state.config.get(
-                        "volume_name", "generated_metadata"
-                    ),
-                }
-
-                # Merge job parameters with config parameters
-                job_parameters.update(config_params)
+                # Add ALL config parameters from the app (loaded from variables.yml + user modifications)
+                # No hardcoded defaults - everything comes from configuration
+                for key, value in st.session_state.config.items():
+                    if key not in job_parameters and value is not None and value != "":
+                        # Convert boolean values to strings for notebook widgets
+                        if isinstance(value, bool):
+                            job_parameters[key] = str(value).lower()
+                        else:
+                            job_parameters[key] = str(value)
 
                 # Create job configuration
                 job_config = JobSettings(
