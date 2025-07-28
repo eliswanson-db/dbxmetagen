@@ -59,9 +59,47 @@ class DBXMetaGenApp:
 
     def load_default_config(self) -> Dict[str, Any]:
         """Load default configuration from variables.yml"""
+        try:
+            # Try to load from variables.yml (copied by deploy script or pre-commit hook)
+            with open("variables.yml", "r") as f:
+                variables = yaml.safe_load(f)
+
+            if "variables" in variables:
+                # Extract default values from the variables.yml structure
+                default_config = {}
+                for key, config in variables["variables"].items():
+                    default_config[key] = config.get("default")
+
+                # Get host from environment if available, otherwise use from config
+                if "host" in default_config and st.session_state.get("databricks_host"):
+                    default_config["host"] = st.session_state.databricks_host
+
+                return default_config
+            else:
+                st.warning(
+                    "⚠️ variables.yml found but has unexpected format, using fallback defaults"
+                )
+
+        except FileNotFoundError:
+            st.warning("⚠️ variables.yml not found, using built-in defaults")
+        except Exception as e:
+            st.warning(
+                f"⚠️ Error loading variables.yml: {str(e)}, using built-in defaults"
+            )
+
+        # Fallback to hardcoded defaults if variables.yml is not available
+        return self.get_builtin_defaults()
+
+    def get_builtin_defaults(self) -> Dict[str, Any]:
+        """Get built-in default configuration as fallback"""
+        # Get current host from environment if available
+        current_host = st.session_state.get("databricks_host") or os.environ.get(
+            "DATABRICKS_HOST", ""
+        )
+
         default_config = {
             "catalog_name": "dbxmetagen",
-            "host": "https://your-databricks-workspace.cloud.databricks.com/",
+            "host": current_host,
             "allow_data": True,
             "sample_size": 5,
             "mode": "comment",
@@ -409,6 +447,41 @@ class DBXMetaGenApp:
                 }
                 workers = worker_map[cluster_size]
 
+                # Prepare parameters from current app configuration
+                job_parameters = {
+                    "table_names": ",".join(tables),
+                    "mode": st.session_state.config.get("mode", "comment"),
+                    "env": "app",
+                    "cleanup_control_table": "true",
+                }
+
+                # Add other config parameters that the notebook can use
+                config_params = {
+                    "catalog_name": st.session_state.config.get(
+                        "catalog_name", "dbxmetagen"
+                    ),
+                    "allow_data": str(
+                        st.session_state.config.get("allow_data", True)
+                    ).lower(),
+                    "sample_size": str(st.session_state.config.get("sample_size", 5)),
+                    "apply_ddl": str(
+                        st.session_state.config.get("apply_ddl", False)
+                    ).lower(),
+                    "model": st.session_state.config.get(
+                        "model", "databricks-claude-3-7-sonnet"
+                    ),
+                    "temperature": str(st.session_state.config.get("temperature", 0.1)),
+                    "schema_name": st.session_state.config.get(
+                        "schema_name", "metadata_results"
+                    ),
+                    "volume_name": st.session_state.config.get(
+                        "volume_name", "generated_metadata"
+                    ),
+                }
+
+                # Merge job parameters with config parameters
+                job_parameters.update(config_params)
+
                 # Create job configuration
                 job_config = JobSettings(
                     name=job_name,
@@ -417,13 +490,7 @@ class DBXMetaGenApp:
                             "task_key": "generate_metadata",
                             "notebook_task": NotebookTask(
                                 notebook_path="./notebooks/generate_metadata",
-                                base_parameters={
-                                    "table_names": ",".join(tables),
-                                    "mode": st.session_state.config.get(
-                                        "mode", "comment"
-                                    ),
-                                    "env": "app",
-                                },
+                                base_parameters=job_parameters,
                             ),
                             "job_cluster_key": "metadata_cluster",
                         }
@@ -451,13 +518,10 @@ class DBXMetaGenApp:
                 # Create the job
                 job = st.session_state.workspace_client.jobs.create(**job_config)
 
-                # Run the job
+                # Run the job with the same parameters
                 run = st.session_state.workspace_client.jobs.run_now(
                     job_id=job.job_id,
-                    notebook_params={
-                        "table_names": ",".join(tables),
-                        "mode": st.session_state.config.get("mode", "comment"),
-                    },
+                    notebook_params=job_parameters,
                 )
 
                 # Store job info

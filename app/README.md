@@ -22,22 +22,22 @@ cd dbxmetagen
 databricks bundle deploy
 ```
 
-### 2. Configure Secrets
+### 2. Set Up Permissions
 
-Create a Databricks secret scope and token:
+The app uses service principal authentication and requires permissions to be set up:
 
-```bash
-# Create secret scope
-databricks secrets create-scope dbxmetagen
+1. **Update variables.yml** with your serverless warehouse ID:
+   ```yaml
+   serverless_warehouse_id:
+     default: "your_actual_warehouse_id"
+   ```
 
-# Add your Databricks token 
-databricks secrets put-secret --json '{"scope": "dbxmetagen", "key": "databricks_token", "string_value": "YOUR_TOKEN_HERE"}'
-```
+2. **Run the permissions setup job** (deployed with the app):
+   - Go to Workflows in your Databricks workspace
+   - Find the `dbxmetagen_permissions_setup` job
+   - Run it once to grant necessary permissions to the app service principal
 
-**Note**: This requires Databricks CLI version 0.234 or higher. If you're using an older version, please update:
-```bash
-curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-```
+**Note**: The app uses M2M OAuth authentication, so no tokens are needed. The service principal permissions are handled automatically by the asset bundle.
 
 ### 3. Access the App
 
@@ -52,21 +52,24 @@ After deployment, access your app through the Databricks workspace.
 
 ### Data Processing Settings
 - **Allow Data**: Whether to include actual data samples in LLM processing
-- **Sample Size**: Number of data rows to sample per column (0 = no data sampling)
+- **Sample Size**: Number of data rows to sample per column (0 = no data sampling)  
 - **Mode**: Choose between generating comments, identifying PII, or both
+- **Apply DDL**: ⚠️ **WARNING** - This will directly modify your tables
 
 ### Advanced Settings
-- **LLM Model**: Choose from available Databricks models
-- **Apply DDL**: ⚠️ **WARNING** - This will directly modify your tables
+- **LLM Model**: Choose from available Databricks models (Claude, Llama, etc.)
 - **Temperature**: Model creativity level (0.0 = deterministic, 1.0 = creative)
+- **Schema/Volume Names**: Configure where results are stored
+- **Output Formats**: Choose between SQL, TSV, or CSV outputs
 
 ## Usage
 
 ### 1. Configure Settings
-Use the sidebar to configure your processing parameters. You can:
-- Load default settings from `variables.yml`
-- Save and load custom configurations
-- Validate settings before processing
+Use the sidebar to configure your processing parameters. The app automatically:
+- Loads default settings from `variables.yml` 
+- Uses your current Databricks workspace host
+- Allows you to override any setting for specific jobs
+- Saves and loads custom configurations
 
 ### 2. Select Tables
 Choose tables for processing by:
@@ -75,9 +78,10 @@ Choose tables for processing by:
 
 ### 3. Create and Monitor Jobs
 - Configure job parameters (name, cluster size)
-- Create and run metadata generation jobs
-- Monitor progress in real-time
-- View detailed job information in Databricks
+- All current app settings are automatically passed to the job
+- Create and run metadata generation jobs with your custom configuration
+- Monitor progress in real-time with status updates
+- View detailed job information in Databricks workspace
 
 ### 4. View Results
 - Browse generated metadata files
@@ -131,8 +135,9 @@ The app is configured for deployment via Databricks Asset Bundle in `resources/a
 ## Troubleshooting
 
 ### Authentication Issues
-- Ensure Databricks token is properly configured in secret scope
-- Verify host URL format in configuration
+- The app uses service principal M2M OAuth authentication
+- Ensure the permissions setup job has been run successfully
+- Verify the app service principal has necessary catalog permissions
 
 ### Table Access
 - Confirm read access to specified tables
@@ -151,9 +156,10 @@ The app is configured for deployment via Databricks Asset Bundle in `resources/a
 ## Security Considerations
 
 - **Data Privacy**: Configure `allow_data` and `sample_size` based on your data sensitivity
-- **Token Security**: Use Databricks secret scope for token storage
-- **Table Access**: App uses your Databricks permissions for table access
+- **Service Principal Security**: App uses managed service principal authentication (M2M OAuth)
+- **Table Access**: App uses service principal permissions configured by the setup job
 - **DDL Application**: Use `apply_ddl=false` for testing to avoid modifying tables
+- **Permissions**: Principle of least privilege - only grants necessary catalog and table permissions
 
 ## Support
 
