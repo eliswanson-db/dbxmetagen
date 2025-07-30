@@ -743,8 +743,7 @@ def set_protected_classification(df: DataFrame, config: MetadataConfig) -> DataF
 def replace_medical_information_with_phi(df: DataFrame, config: MetadataConfig) -> DataFrame:
     if df is None:
         return None
-        
-    if config.mode == "pi" and config.disable_medical_information_value == "true":
+    if config.mode == "pi" and config.disable_medical_information_value:
         df = df.withColumn(
             "type", 
             when(
