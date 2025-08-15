@@ -7,7 +7,13 @@ command: [
 env:
   - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
     value: "false"
-  - name: DATABRICKS_HOST
-    valueFrom: "host"
-  - name: DATABRICKS_TOKEN
-    valueFrom: "databricks_token"
+  - name: DEBUG
+    value: "true"
+  # DATABRICKS_HOST is automatically provided by Databricks Apps
+  # Service principal authentication is handled automatically
+  - name: APP_ENV
+    value: "dev"  # use "prod" in production deployments
+  - name: DEPLOY_USER_NAME
+    value: ""  # optional: set to the deploying user's email (e.g., user@company.com)
+  # - name: NOTEBOOK_PATH
+  #   value: "/Workspace/Shared/dbxmetagen/dev/files/notebooks/generate_metadata"  # optional explicit override

@@ -9,10 +9,11 @@ from pyspark.sql.functions import collect_list, struct, to_json
 
 logging.basicConfig(
     level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(funcName)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
 
 class Prompt(ABC):
     def __init__(self, config: Any, df: DataFrame, full_table_name: str):
@@ -57,54 +58,63 @@ class Prompt(ABC):
         Returns:
             pd.DataFrame: Modified Pandas DataFrame with truncated values.
         """
+
         def truncate_value(value: str, word_limit: int) -> str:
             words = value.split()
             if len(words) > word_limit:
-                return ' '.join(words[:word_limit])
+                return " ".join(words[:word_limit])
             return value
 
-        word_limit = getattr(self.config, 'word_limit_per_cell', 100) 
+        word_limit = getattr(self.config, "word_limit_per_cell", 100)
         truncated_count = 0
 
         for column in pandas_df.columns:
             pandas_df[column] = pandas_df[column].astype(str)
-            
-            truncated_values = pandas_df[column].apply(lambda x: truncate_value(x, word_limit))
-            truncation_flags = pandas_df[column].apply(lambda x: len(x.split()) > word_limit)
+
+            truncated_values = pandas_df[column].apply(
+                lambda x: truncate_value(x, word_limit)
+            )
+            truncation_flags = pandas_df[column].apply(
+                lambda x: len(x.split()) > word_limit
+            )
             pandas_df[column] = truncated_values
             truncated_count += truncation_flags.sum()
 
         if truncated_count > 0:
             print(f"{truncated_count} cells were truncated.")
             logger.info(f"{truncated_count} cells were truncated.")
-        
+
         return pandas_df
 
-    def filter_extended_metadata_fields(self, extended_metadata_df: DataFrame) -> DataFrame:
+    def filter_extended_metadata_fields(
+        self, extended_metadata_df: DataFrame
+    ) -> DataFrame:
         """
         Filter extended metadata fields based on the current configuration mode.
-        
+
         In 'pi' mode: Filters out NULL info_values
         In 'comment' mode: Filters NULL values, descriptions, comments, and optionally data_type
-        
+
         Args:
             extended_metadata_df: DataFrame containing extended metadata
-            
+
         Returns:
             Filtered DataFrame
-            
+
         Raises:
             ValueError: For invalid mode configuration
         """
         mode_handlers = {
             "pi": self._filter_pi_mode,
-            "comment": self._filter_comment_mode
+            "comment": self._filter_comment_mode,
         }
-        
+
         handler = mode_handlers.get(self.config.mode)
         if not handler:
-            raise ValueError("Invalid mode provided. Please use either 'pi' or 'comment'")
-        
+            raise ValueError(
+                "Invalid mode provided. Please use either 'pi' or 'comment'"
+            )
+
         return handler(extended_metadata_df)
 
     def _filter_pi_mode(self, df: DataFrame) -> DataFrame:
@@ -114,18 +124,17 @@ class Prompt(ABC):
     def _filter_comment_mode(self, df: DataFrame) -> DataFrame:
         """Filter metadata for comment mode with additional exclusions"""
         filtered_df = df.filter(
-            (df["info_value"] != "NULL") &
-            ~df["info_name"].isin(["description", "comment"])
+            (df["info_value"] != "NULL")
+            & ~df["info_name"].isin(["description", "comment"])
         )
-        
+
         if not self.config.include_datatype_from_metadata:
             filtered_df = filtered_df.filter(df["info_name"] != "data_type")
 
         if not self.config.include_possible_data_fields_in_metadata:
             filtered_df = filtered_df.filter(~df["info_name"].isin(["min", "max"]))
-        
-        return filtered_df
 
+        return filtered_df
 
     def add_metadata_to_comment_input(self) -> None:
         """
@@ -134,8 +143,7 @@ class Prompt(ABC):
         column_metadata_dict = self.extract_column_metadata()
         table_metadata = self.get_table_metadata()
         self.add_table_metadata_to_column_contents(table_metadata)
-        self.prompt_content['column_contents']['column_metadata'] = column_metadata_dict
-
+        self.prompt_content["column_contents"]["column_metadata"] = column_metadata_dict
 
     def extract_column_metadata(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -145,26 +153,81 @@ class Prompt(ABC):
             Dict[str, Dict[str, Any]]: Dictionary containing metadata for each column.
         """
         column_metadata_dict = {}
-        for column_name in self.prompt_content['column_contents']['columns']:
+        for column_name in self.prompt_content["column_contents"]["columns"]:
+            print(f"[DEBUG] Extracting metadata for column: {column_name}")
+
             extended_metadata_df = self.spark.sql(
                 f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
             )
-            filtered_metadata_df = self.filter_extended_metadata_fields(extended_metadata_df)
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient='list')
-            combined_metadata = dict(zip(column_metadata['info_name'], column_metadata['info_value']))
-            combined_metadata = self.add_column_metadata_to_column_contents(column_name, combined_metadata)
+
+            print(f"[DEBUG] DESCRIBE EXTENDED schema for {column_name}:")
+            extended_metadata_df.printSchema()
+            print(
+                f"[DEBUG] DESCRIBE EXTENDED row count: {extended_metadata_df.count()}"
+            )
+
+            # Sample a few rows to see what the data looks like
+            try:
+                sample_rows = extended_metadata_df.limit(3).collect()
+                print(f"[DEBUG] Sample DESCRIBE EXTENDED rows for {column_name}:")
+                for i, row in enumerate(sample_rows):
+                    print(f"  Row {i}: {dict(row.asDict())}")
+            except Exception as e:
+                print(f"[DEBUG] Error sampling DESCRIBE EXTENDED rows: {e}")
+
+            filtered_metadata_df = self.filter_extended_metadata_fields(
+                extended_metadata_df
+            )
+
+            print(f"[DEBUG] Filtered metadata schema for {column_name}:")
+            filtered_metadata_df.printSchema()
+            print(
+                f"[DEBUG] Filtered metadata row count: {filtered_metadata_df.count()}"
+            )
+
+            # Check if the filtered DataFrame is empty or has problematic data
+            try:
+                filtered_sample = filtered_metadata_df.limit(3).collect()
+                print(f"[DEBUG] Sample filtered rows for {column_name}:")
+                for i, row in enumerate(filtered_sample):
+                    print(f"  Row {i}: {dict(row.asDict())}")
+            except Exception as e:
+                print(f"[DEBUG] Error sampling filtered rows: {e}")
+
+            try:
+                column_metadata = filtered_metadata_df.toPandas().to_dict(orient="list")
+                print(f"[DEBUG] Pandas conversion successful for {column_name}")
+                print(f"[DEBUG] Column metadata keys: {list(column_metadata.keys())}")
+                print(
+                    f"[DEBUG] Column metadata sample: {str(column_metadata)[:200]}..."
+                )
+            except Exception as e:
+                print(f"[DEBUG] ERROR in pandas conversion for {column_name}: {e}")
+                # Try to get more details about the error
+                print(f"[DEBUG] DataFrame dtypes: {filtered_metadata_df.dtypes}")
+                raise
+
+            combined_metadata = dict(
+                zip(column_metadata["info_name"], column_metadata["info_value"])
+            )
+            combined_metadata = self.add_column_metadata_to_column_contents(
+                column_name, combined_metadata
+            )
             column_metadata_dict[column_name] = combined_metadata
+            print(f"[DEBUG] Successfully processed metadata for column: {column_name}")
+
         return column_metadata_dict
 
-
-    def get_column_constraints(self, column_name: str, combined_metadata: Dict[str, str]):
+    def get_column_constraints(
+        self, column_name: str, combined_metadata: Dict[str, str]
+    ):
         """
         Add column constraints to the column contents.
 
         Args:
             column_metadata (Tuple[Dict[str, str], str, str, str]): Tuple containing column constraints.
         """
-        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        catalog_name, schema_name, table_name = self.full_table_name.split(".")
         query = f"""
         SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value
         FROM system.information_schema.column_tags
@@ -173,15 +236,23 @@ class Prompt(ABC):
         AND table_name = '{table_name}';
         """
         result_df = self.spark.sql(query)
-        column_tags = result_df.groupBy("column_name").agg(
-            collect_list(struct("tag_name", "tag_value")).alias("tags")
-        ).collect()
-        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        column_tags = (
+            result_df.groupBy("column_name")
+            .agg(collect_list(struct("tag_name", "tag_value")).alias("tags"))
+            .collect()
+        )
+        column_tags_dict = {
+            row["column_name"]: {
+                tag["tag_name"]: tag["tag_value"] for tag in row["tags"]
+            }
+            for row in column_tags
+        }
         logger.debug("column tags dict: %s", column_tags_dict)
-        return column_tags_dict        
+        return column_tags_dict
 
-
-    def add_column_metadata_to_column_contents(self, column_name: str, combined_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def add_column_metadata_to_column_contents(
+        self, column_name: str, combined_metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Add column metadata to the column contents.
 
@@ -194,10 +265,12 @@ class Prompt(ABC):
         """
         column_tags = self.get_column_tags()
         if column_name in column_tags:
-            combined_metadata['tags'] = column_tags[column_name]
+            combined_metadata["tags"] = column_tags[column_name]
         return combined_metadata
 
-    def add_table_metadata_to_column_contents(self, table_metadata: Tuple[Dict[str, str], str, str, str]) -> None:
+    def add_table_metadata_to_column_contents(
+        self, table_metadata: Tuple[Dict[str, str], str, str, str]
+    ) -> None:
         """
         Add table metadata to the column contents.
 
@@ -205,10 +278,10 @@ class Prompt(ABC):
             table_metadata (Tuple[Dict[str, str], str, str, str]): Tuple containing column tags, table tags, table constraints, and table comments.
         """
         column_tags, table_tags, table_constraints, table_comments = table_metadata
-        self.prompt_content['column_contents']['table_tags'] = table_tags
-        self.prompt_content['column_contents']['table_constraints'] = table_constraints
+        self.prompt_content["column_contents"]["table_tags"] = table_tags
+        self.prompt_content["column_contents"]["table_constraints"] = table_constraints
         if self.config.include_existing_table_comment:
-            self.prompt_content['column_contents']['table_comments'] = table_comments
+            self.prompt_content["column_contents"]["table_comments"] = table_comments
 
     def get_column_tags(self) -> Dict[str, Dict[str, str]]:
         """
@@ -217,7 +290,7 @@ class Prompt(ABC):
         Returns:
             Dict[str, Dict[str, str]]: Dictionary containing column tags.
         """
-        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        catalog_name, schema_name, table_name = self.full_table_name.split(".")
         query = f"""
         SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value
         FROM system.information_schema.column_tags
@@ -226,10 +299,17 @@ class Prompt(ABC):
         AND table_name = '{table_name}';
         """
         result_df = self.spark.sql(query)
-        column_tags = result_df.groupBy("column_name").agg(
-            collect_list(struct("tag_name", "tag_value")).alias("tags")
-        ).collect()
-        column_tags_dict = {row["column_name"]: {tag["tag_name"]: tag["tag_value"] for tag in row["tags"]} for row in column_tags}
+        column_tags = (
+            result_df.groupBy("column_name")
+            .agg(collect_list(struct("tag_name", "tag_value")).alias("tags"))
+            .collect()
+        )
+        column_tags_dict = {
+            row["column_name"]: {
+                tag["tag_name"]: tag["tag_value"] for tag in row["tags"]
+            }
+            for row in column_tags
+        }
         logger.debug("column tags dict: %s", column_tags_dict)
         return column_tags_dict
 
@@ -240,7 +320,7 @@ class Prompt(ABC):
         Returns:
             str: JSON string containing table tags.
         """
-        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        catalog_name, schema_name, table_name = self.full_table_name.split(".")
         query = f"""
         SELECT tag_name, tag_value
         FROM system.information_schema.table_tags
@@ -258,7 +338,7 @@ class Prompt(ABC):
         Returns:
             str: JSON string containing table constraints.
         """
-        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        catalog_name, schema_name, table_name = self.full_table_name.split(".")
         query = f"""
         SELECT 
         c.table_name, 
@@ -283,7 +363,7 @@ class Prompt(ABC):
         Returns:
             str: JSON string containing table comment.
         """
-        catalog_name, schema_name, table_name = self.full_table_name.split('.')
+        catalog_name, schema_name, table_name = self.full_table_name.split(".")
         query = f"""
         SELECT table_name, comment
         FROM system.information_schema.tables
@@ -323,7 +403,7 @@ class Prompt(ABC):
             json_df = df.select(to_json(struct("*")).alias("json_data"))
             json_strings = json_df.collect()
             json_response = ",".join([row.json_data for row in json_strings])
-            json_response = '[' + json_response + ']'
+            json_response = "[" + json_response + "]"
             logger.debug("json response in prompt: %s", json_response)
         return json_response
 
@@ -337,7 +417,7 @@ class CommentPrompt(Prompt):
             truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": truncated_pandas_df.to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient="split"),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
@@ -345,8 +425,7 @@ class CommentPrompt(Prompt):
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
-              "comment":
-              [
+            "comment": [
                 {
                     "role": "system",
                     "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. You are very careful to properly identify PII, PCI, and PHI, and you care deeply about ensuring high quality responses.
@@ -388,31 +467,30 @@ class CommentPrompt(Prompt):
                     4) a description of the metadata and further inference from the metadata itself. Do not rely too heavily on the data in the column contents, but be cautious inferring too strongly about the entire column based on the sample. Do not add a note after the dictionary, and do not provide any offensive or dangerous content.
 
                     Please ONLY provide the dictionary response. The response will be considered invalid if it contains any other content other than the dictionary.
-                    """
+                    """,
                 },
                 {
                     "role": "user",
-                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}"""
-                },
-                {   "role": "assistant",
-                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but as a string rather than as a boolean value."]}"""
-                },
-                {
-                    "role": "user",
-                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}"""
+                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}""",
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, typically on a scale of 1 to 5. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values: 'Yes' and 'No'. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}"""
+                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to the same value, but as a string rather than as a boolean value."]}""",
                 },
                 {
                     "role": "user",
-                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}"""
-                }
-
-              ]
-            }
-
+                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}""",
+                },
+                {
+                    "role": "assistant",
+                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, representing single digit integers. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}""",
+                },
+                {
+                    "role": "user",
+                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}""",
+                },
+            ]
+        }
 
 
 class PIPrompt(Prompt):
@@ -424,11 +502,11 @@ class PIPrompt(Prompt):
             truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": truncated_pandas_df.to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient="split"),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
-        content = self.prompt_content                
+        content = self.prompt_content
         if self.config.include_deterministic_pi:
             self.deterministic_results = detect_pi(self.config, self.prompt_content)
         else:
@@ -465,36 +543,34 @@ class PIPrompt(Prompt):
 
                     ###
                     """
-                    +
-                    f"""PI Classification Rules: {self.config.pi_classification_rules}.
+                    + f"""PI Classification Rules: {self.config.pi_classification_rules}.
                     \n
                     ###
-                    """
-
+                    """,
                 },
                 {
                     "role": "user",
-                    "content": """{"index": [0, 1], "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "4111 1111 1111 1111", "MR12345", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "5500 0000 0000 0004", "MR67890", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'credit_card': {'col_name': 'credit_card', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '19', 'max_col_len': '19'}, 'medical_record': {'col_name': 'medical_record', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}"""
+                    "content": """{"index": [0, 1], "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "4111 1111 1111 1111", "MR12345", "False"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "5500 0000 0000 0004", "MR67890", "False"]], "column_metadata": {'name': {'col_name': 'name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '16', 'max_col_len': '23'}, 'address': {'col_name': 'address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '46', 'avg_col_len': '4', 'max_col_len': '4'}, 'email': {'col_name': 'email', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '15', 'max_col_len': '15'}, 'credit_card': {'col_name': 'credit_card', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '19', 'max_col_len': '19'}, 'medical_record': {'col_name': 'medical_record', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'delete_flag': {'col_name': 'delete_flag', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}""",
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "pi", "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pci", "confidence": 0.95}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98}]}"""
+                    "content": """{"table": "pi", "columns": ["name", "address", "email", "credit_card", "medical_record", "delete_flag"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "pi", "type": "pci", "confidence": 0.95}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.98}]}""",
                 },
                 {
                     "role": "user",
-                    "content": """{"index": [0, 1], "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "data": [["user123", "192.168.1.1", "sess123", "$100.00", "2024-03-05", "True"], ["user456", "192.168.1.2", "sess456", "$200.00", "2024-03-06", "False"]], "column_metadata": {'username': {'col_name': 'username', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '7', 'max_col_len': '7'}, 'ip_address': {'col_name': 'ip_address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '11', 'max_col_len': '11'}, 'session_id': {'col_name': 'session_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'purchase_amount': {'col_name': 'purchase_amount', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'transaction_date': {'col_name': 'transaction_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}, 'is_active': {'col_name': 'is_active', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}"""
+                    "content": """{"index": [0, 1], "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "data": [["user123", "192.168.1.1", "sess123", "$100.00", "2024-03-05", "True"], ["user456", "192.168.1.2", "sess456", "$200.00", "2024-03-06", "False"]], "column_metadata": {'username': {'col_name': 'username', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '5', 'avg_col_len': '7', 'max_col_len': '7'}, 'ip_address': {'col_name': 'ip_address', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '11', 'max_col_len': '11'}, 'session_id': {'col_name': 'session_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'purchase_amount': {'col_name': 'purchase_amount', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'transaction_date': {'col_name': 'transaction_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}, 'is_active': {'col_name': 'is_active', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '5', 'max_col_len': '5'}}}""",
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "pi", "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.8}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.85}, {"classification": "None", "type": "None", "confidence": 0.95}]}"""
+                    "content": """{"table": "pi", "columns": ["username", "ip_address", "session_id", "purchase_amount", "transaction_date", "is_active"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.85}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.8}, {"classification": "None", "type": "None", "confidence": 0.9}, {"classification": "None", "type": "None", "confidence": 0.85}, {"classification": "None", "type": "None", "confidence": 0.95}]}""",
                 },
                 {
                     "role": "user",
-                    "content": """{"index": [0, 1], "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "data": [["Jane Doe", "P12345", "Diabetes", "10 mg Insulin BID", "Ms. Doe is responding well to treatment", "2023-06-15"], ["John Smith", "P67890", "Hypertension", "Medicate patient P12345 and recommend exercise.", "John's blood pressure is under control", "2023-06-16"]], "column_metadata": {'patient_name': {'col_name': 'patient_name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'patient_id': {'col_name': 'patient_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '6', 'max_col_len': '6'}, 'diagnosis': {'col_name': 'diagnosis', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'treatment': {'col_name': 'treatment', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'doctor_notes': {'col_name': 'doctor_notes', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '30', 'max_col_len': '30'}, 'appointment_date': {'col_name': 'appointment_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}}}"""
+                    "content": """{"index": [0, 1], "columns": ["patient_name", "patient_id", "diagnosis", "treatment", "doctor_notes", "appointment_date"], "data": [["Jane Doe", "P12345", "Diabetes", "10 mg Insulin BID", "Ms. Doe is responding well to treatment", "2023-06-15"], ["John Smith", "P67890", "Hypertension", "Medicate patient P12345 and recommend exercise.", "John's blood pressure is under control", "2023-06-16"]], "column_metadata": {'patient_name': {'col_name': 'patient_name', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'patient_id': {'col_name': 'patient_id', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '6', 'max_col_len': '6'}, 'diagnosis': {'col_name': 'diagnosis', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '8', 'max_col_len': '8'}, 'treatment': {'col_name': 'treatment', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '7', 'max_col_len': '7'}, 'doctor_notes': {'col_name': 'doctor_notes', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '30', 'max_col_len': '30'}, 'appointment_date': {'col_name': 'appointment_date', 'data_type': 'string', 'num_nulls': '0', 'distinct_count': '2', 'avg_col_len': '10', 'max_col_len': '10'}}}""",
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "phi", "columns": ["patient_name", "patient_id", "diagnosis", "treatment_plan", "doctor_notes", "appointment_date"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "medical_information", "type": "medical_information", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}]}"""
+                    "content": """{"table": "phi", "columns": ["patient_name", "patient_id", "diagnosis", "treatment_plan", "doctor_notes", "appointment_date"], "column_contents": [{"classification": "pi", "type": "pii", "confidence": 0.95}, {"classification": "pi", "type": "pii", "confidence": 0.9}, {"classification": "medical_information", "type": "medical_information", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}, {"classification": "pi", "type": "phi", "confidence": 0.9}, {"classification": "pi", "type": "phi", "confidence": 0.7}]}""",
                 },
                 {
                     "role": "user",
@@ -503,9 +579,9 @@ class PIPrompt(Prompt):
                     ###
                     Deterministic results from Presidio or other outside checks to consider to help check your outputs are here: {self.deterministic_results}.
                     ###
-                    """
-                }
-              ]
+                    """,
+                },
+            ]
         }
 
 
@@ -518,7 +594,7 @@ class CommentNoDataPrompt(Prompt):
             truncated_pandas_df = pandas_df
         return {
             "table_name": self.full_table_name,
-            "column_contents": truncated_pandas_df.to_dict(orient='split'),
+            "column_contents": truncated_pandas_df.to_dict(orient="split"),
         }
 
     def create_prompt_template(self) -> Dict[str, Any]:
@@ -526,8 +602,7 @@ class CommentNoDataPrompt(Prompt):
         content = self.prompt_content
         acro_content = self.config.acro_content
         return {
-            "comment":
-              [
+            "comment": [
                 {
                     "role": "system",
                     "content": """You are an AI assistant helping to generate metadata for tables and columns in Databricks. The data you are working with may be sensitive so you don't want to include any data whatsoever in table or column descriptions. It doesn't matter if data are coming from data pulls or from stored metadata, do not include any data in your outputs.
@@ -571,31 +646,30 @@ class CommentNoDataPrompt(Prompt):
                     4) a description of the metadata and further inference from the metadata itself. Do not rely too heavily on the data in the column contents, but be cautious inferring too strongly about the entire column based on the sample. Do not add a note after the dictionary, and do not provide any offensive or dangerous content.
 
                     Please ONLY provide the dictionary response. The response will be considered invalid if it contains any other content other than the dictionary.
-                    """
+                    """,
                 },
                 {
                     "role": "user",
-                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}"""
-                },
-                {   "role": "assistant",
-                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to the same value, but as a string rather than as a boolean value."]}"""
-                },
-                {
-                    "role": "user",
-                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}"""
+                    "content": """Content is here - {"table_name": "finance.restricted.customer_monthly_recurring_revenue", "column_contents": {"index": [0,1], "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "data": [["John Johnson", "123 Main St", "jj@msn.com", "$355.45", "2024-01-01", "True"], ["Alice Ericks", "6789 Fake Ave", "alice.ericks@aol.com", "$4850.00", "2024-12-01", "False"]}, "column_metadata": {"name": {"col_name": "name", "data_type": "string", "num_nulls": "0", "distinct_count": "5", "avg_col_len": "16", "max_col_len": "23"}, "address": {"col_name": "address", "data_type": "string", "num_nulls": "0", "distinct_count": "46", "avg_col_len": "4", "max_col_len": "4"}, "email": {"col_name": "email", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "15", "max_col_len": "15"}, "revenue": {"col_name": "revenue", "data_type": "string", "num_nulls": "0", "distinct_count": "10", "avg_col_len": "11", "max_col_len": "11"}, "eap_created": {"col_name": "eap_created", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}, "delete_flag": {"col_name": "delete_flag", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "11", "max_col_len": "11"}}}} and abbreviations and acronyms are here - {"EAP - enterprise architecture platform"}""",
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, representing single digit integers. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}"""
+                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to the same value, but as a string rather than as a boolean value."]}""",
                 },
                 {
                     "role": "user",
-                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}"""
-                }
-
-              ]
-            }
-
+                    "content": """Content is here - {"table_name": "hr.employees.employee_performance_reviews", "column_contents": {"index": [0,1,2,3,4], "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "data": [["E123", "2023-06-15", "4.5", "Excellent work throughout the year", "Yes"], ["E456", "2023-06-15", "3.2", "Needs improvement in meeting deadlines", "No"], ["E789", "2023-06-15", "4.8", "Outstanding performance and leadership", "Yes"], ["E101", "2023-06-15", "2.9", "Struggles with teamwork", "No"], ["E112", "2023-06-15", "3.7", "Consistently meets expectations", "Yes"]], "column_metadata": {"employee_id": {"col_name": "employee_id", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "4", "max_col_len": "4"}, "review_date": {"col_name": "review_date", "data_type": "string", "num_nulls": "0", "distinct_count": "1", "avg_col_len": "10", "max_col_len": "10"}, "performance_score": {"col_name": "performance_score", "data_type": "string", "num_nulls": "0", "distinct_count": "50", "avg_col_len": "3", "max_col_len": "3"}, "manager_comments": {"col_name": "manager_comments", "data_type": "string", "num_nulls": "0", "distinct_count": "100", "avg_col_len": "30", "max_col_len": "100"}, "promotion_recommendation": {"col_name": "promotion_recommendation", "data_type": "string", "num_nulls": "0", "distinct_count": "2", "avg_col_len": "3", "max_col_len": "3"}}}} and abbreviations and acronyms are here - {"EID - employee ID"}""",
+                },
+                {
+                    "role": "assistant",
+                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, representing single digit integers. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}""",
+                },
+                {
+                    "role": "user",
+                    "content": f"""Content is here - {content} and abbreviations are here - {acro_content}""",
+                },
+            ]
+        }
 
 
 class PromptFactory:

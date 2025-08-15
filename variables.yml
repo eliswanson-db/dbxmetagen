@@ -36,8 +36,8 @@ variables:
     description: Whether or not to string format any bracketed variables in catalog name. If set to false, then __CATALOG_NAME__{env} will keep the _{env} suffix, if not it will be formatted with the current environment.
     default: false 
   model:
-    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision. 
-    default: databricks-claude-3-7-sonnet
+    description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses, but it also sometimes returns a Pydantic validation error on certain data types. Review security, tenancy, and cost considerations before making a decision.
+    default: databricks-meta-llama-3-3-70b-instruct
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
@@ -129,10 +129,18 @@ variables:
   current_user:
     description: User deploying the bundle. Can apply to service principals as well.
     default: ${workspace.current_user.userName}
+  owner_user:
+    description: User home under which workspace files will be synced. Set to the human deployer's email to avoid SP home.
+    default: ${workspace.current_user.userName}
   current_working_directory:
     description: Working directory or bundle root.
-    default: /Users/${var.current_user}/.bundle/${bundle.name}/${bundle.target}
-
+    default: /Users/${var.owner_user}/.bundle/${bundle.name}/${bundle.target}
+  app_service_principal_application_id:
+    description: Application ID of the service principal that must access synced notebooks and files.
+    default: "034f50f1-0a51-4d3d-9137-ca312e31fc23"
+  serverless_warehouse_auto_stop_mins:
+    description: Auto-stop time in minutes for the serverless warehouse used by permissions setup job.
+    default: 10
   control_table:
     description: Control table name.
     default: "metadata_control_{}"
@@ -154,3 +162,6 @@ variables:
   column_with_reviewed_ddl:
     description: When reviewing content and supplying it back to the sync process, do not modify the DDL column, modify the columns 'column_content' or 'type' and 'classification'. For the alternative column the specified option should just be 'other'. We will add an option to modify the DDL in a future release.
     default: other
+  debug_mode:
+    description: Enable debug mode for detailed logging and troubleshooting. When enabled, the application will output detailed debug information.
+    default: "false"

@@ -30,7 +30,7 @@ The app uses service principal authentication and requires permissions to be set
    - Go to Workflows in your Databricks workspace
    - Find the `dbxmetagen_permissions_setup` job
    - Run it once to grant necessary permissions to the app service principal
-   - The job uses serverless compute, so no warehouse configuration is needed
+   - The job uses an auto-created XS serverless SQL warehouse that scales to zero
 
 **Note**: The app uses M2M OAuth authentication, so no tokens are needed. The service principal permissions are handled automatically by the asset bundle.
 

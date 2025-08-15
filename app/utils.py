@@ -19,6 +19,13 @@ from databricks.sdk.service.jobs import (
 import time
 
 
+def get_current_user_email():
+    current_user = st.session_state.workspace_client.current_user.me()
+    user_email = current_user.user_name
+    username = user_email.split("@")[0]  # Get username part bef
+    return user_email
+
+
 class JobManager:
     """Manages Databricks job creation and monitoring"""
 
@@ -173,7 +180,9 @@ class ConfigManager:
 
             return defaults
         except FileNotFoundError:
-            st.warning("variables.yml not found, using built-in defaults")
+            st.error(
+                "variables.yml not found, please fix access to variables.yml for app"
+            )
             return ConfigManager.get_builtin_defaults()
         except Exception as e:
             st.error(f"Error loading variables.yml: {str(e)}")
@@ -184,7 +193,7 @@ class ConfigManager:
         """Get built-in default configuration"""
         return {
             "catalog_name": "dbxmetagen",
-            "host": "https://your-databricks-workspace.cloud.databricks.com/",
+            "host": "https://adb-830292400663869.9.azuredatabricks.net/",
             "allow_data": True,
             "sample_size": 5,
             "mode": "comment",

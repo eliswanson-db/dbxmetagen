@@ -130,14 +130,56 @@ widget_config = {
 
 # Filter out empty string values to let variables.yml defaults take precedence
 widget_config = {k: v for k, v in widget_config.items() if v != "" and v is not None}
-context_json = (
-    dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson()
-)
-context = json.loads(context_json)
-job_id = context.get("tags", {}).get("jobId", None)
-current_user = (
-    dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
-)
+# Get context information in a way that works on serverless
+try:
+    # Try the traditional approach first (works on regular clusters)
+    context_json = (
+        dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson()
+    )
+    context = json.loads(context_json)
+    job_id = context.get("tags", {}).get("jobId", None)
+    current_user = (
+        dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .userName()
+        .get()
+    )
+    print(f"Using traditional context approach: user={current_user}, job_id={job_id}")
+except Exception as e:
+    # Fallback for serverless compute
+    print(f"Traditional context access failed (likely serverless): {str(e)[:200]}...")
+
+    # Use alternative methods for serverless
+    import os
+    from databricks.sdk import WorkspaceClient
+
+    # Get current user using Databricks SDK (works on serverless)
+    try:
+        w = WorkspaceClient()
+        current_user_info = w.current_user.me()
+        current_user = current_user_info.user_name
+        print(f"Got current user from SDK: {current_user}")
+    except Exception as sdk_error:
+        print(f"SDK user lookup failed: {sdk_error}")
+        # Last resort: try environment or use default
+        current_user = os.environ.get("DATABRICKS_USERNAME", "unknown_user")
+        print(f"Using fallback user: {current_user}")
+
+    # Try to get job_id from various sources
+    job_id = None
+    try:
+        # Check environment variables first
+        job_id = os.environ.get("DATABRICKS_JOB_ID") or os.environ.get("DB_JOB_ID")
+        if job_id:
+            print(f"Got job_id from environment: {job_id}")
+        else:
+            print("No job_id found in environment variables")
+    except Exception as job_error:
+        print(f"Error getting job_id: {job_error}")
+        job_id = None
+
+    print(f"Using serverless-compatible approach: user={current_user}, job_id={job_id}")
 notebook_variables = {
     "table_names": table_names,
     "mode": mode,
@@ -149,9 +191,42 @@ notebook_variables = {
 
 # Merge widget configuration overrides
 notebook_variables.update(widget_config)
-api_key = (
-    dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-)
+# Get API token in a way that works on serverless
+try:
+    # Try the traditional approach first (works on regular clusters)
+    api_key = (
+        dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .apiToken()
+        .get()
+    )
+    print("Using traditional API token access")
+except Exception as e:
+    # Fallback for serverless compute
+    print(f"Traditional API token access failed (likely serverless): {str(e)[:200]}...")
+
+    # On serverless, try to get from environment or use Databricks SDK
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        # The SDK will automatically find the token from environment or auth
+        w = WorkspaceClient()
+        # We can't directly get the token, but we can set a placeholder
+        # The SDK will handle authentication internally
+        api_key = "serverless-auth-handled-by-sdk"
+        print("Using serverless-compatible authentication")
+    except Exception as sdk_error:
+        print(f"SDK auth failed: {sdk_error}")
+        # Last resort: check environment variables
+        import os
+
+        api_key = os.environ.get("DATABRICKS_TOKEN", "")
+        if not api_key:
+            print("Warning: No API token found. Some functionality may not work.")
+        else:
+            print("Using API token from environment")
+
 os.environ["DATABRICKS_TOKEN"] = api_key
 
 # COMMAND ----------

@@ -29,10 +29,8 @@ cluster_sizes:
 models:
   - "databricks-claude-3-7-sonnet"
   - "databricks-meta-llama-3-3-70b-instruct"
-  - "databricks-claude-3-5-sonnet"
 
 # Processing modes
 modes:
   - "comment"
   - "pi"
-  - "both" 

@@ -4,7 +4,6 @@ bundle:
 
 include:
   - resources/jobs/*.yml
-  - resources/schemas/*.yml
   - resources/apps/*.yml
   - variables.yml
 
@@ -27,6 +26,8 @@ targets:
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
+      - service_principal_name: ${var.app_service_principal_application_id}
+        level: CAN_MANAGE
 
   prod:
     mode: production
@@ -36,5 +37,9 @@ targets:
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
+      - service_principal_name: ${var.app_service_principal_application_id}
+        level: CAN_MANAGE
     run_as:
       user_name: ${var.current_user} #sp name should be used instead for true production cases.
+
+

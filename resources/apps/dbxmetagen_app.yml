@@ -3,15 +3,7 @@ resources:
     dbxmetagen_app:
       name: dbxmetagen-app
       description: "AI-Powered Metadata Generation App for Databricks Tables"
-      
       source_code_path: ../../app
-      
       permissions:
         - user_name: ${var.current_user}
           level: CAN_MANAGE
-        
-      env:
-        - name: "DATABRICKS_HOST"
-          value: ${var.host}
-        - name: "DATABRICKS_TOKEN"
-          value: "{{secrets/dbxmetagen/databricks_token}}"
