@@ -377,7 +377,7 @@ def ensure_directory_exists(directory_path: str) -> None:
     """
     try:
         if not os.path.exists(directory_path):
-            os.makedirs(directory_path)
+            os.mkdir(directory_path)
             logger.info(f"Created directory: {directory_path}")
     except Exception as e:
         logger.error(f"Failed to create directory {directory_path}: {e}")
@@ -442,6 +442,25 @@ def populate_log_table(df, config, current_user, base_path):
             )
     
 
+def get_control_table(config: MetadataConfig) -> str:
+    """
+    Returns the control table name based on the provided configuration.
+
+    Args:
+        config (MetadataConfig): Configuration object containing setup and model parameters.
+
+    Returns:
+        str: The control table name.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    if config.job_id and config.cleanup_control_table == "true":
+        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))+str(config.job_id)
+    else:
+        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    return formatted_control_table
+
+
+
 def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
     """
     Updates the _deleted_at and _updated_at columns to the current timestamp for the specified table.
@@ -451,7 +470,7 @@ def mark_as_deleted(table_name: str, config: MetadataConfig) -> None:
         config (MetadataConfig): Configuration object containing setup and model parameters.
     """
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     update_query = f"""
     UPDATE {control_table}
@@ -622,9 +641,10 @@ def export_df_to_excel(df: pd.DataFrame, output_file: str, export_folder: str) -
         local_path = f"/local_disk0/tmp/{output_file}"
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         if not os.path.exists(local_path):
-            pd.DataFrame().to_excel(local_path)
-        with pd.ExcelWriter(local_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-            df.to_excel(writer, sheet_name='Sheet1', startrow=writer.sheets['Sheet1'].max_row, header=False, index=False)
+            df.to_excel(local_path, index=False)
+        else:
+            with pd.ExcelWriter(local_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                df.to_excel(writer, sheet_name='Sheet1', startrow=writer.sheets['Sheet1'].max_row, header=False, index=False)
         copyfile(local_path, os.path.join(export_folder, output_file))
         logger.info(f"Excel file created at: {output_file}")
     except Exception as e:
@@ -723,8 +743,7 @@ def set_protected_classification(df: DataFrame, config: MetadataConfig) -> DataF
 def replace_medical_information_with_phi(df: DataFrame, config: MetadataConfig) -> DataFrame:
     if df is None:
         return None
-        
-    if config.mode == "pi" and config.disable_medical_information_value == "true":
+    if config.mode == "pi" and config.disable_medical_information_value:
         df = df.withColumn(
             "type", 
             when(
@@ -1132,8 +1151,8 @@ def setup_ddl(config: MetadataConfig) -> None:
     if config.volume_name:
         spark.sql(f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};")
         review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_email(config.current_user)}/reviewed_outputs/"
-        if not os.path.exists(review_output_path):
-            os.mkdir(review_output_path)
+        os.makedirs(review_output_path, exist_ok=True)
+
 
 
 def create_tables(config: MetadataConfig) -> None:
@@ -1147,8 +1166,8 @@ def create_tables(config: MetadataConfig) -> None:
             - control_table (str): The destination table used for tracking table queue.
     """
     spark = SparkSession.builder.getOrCreate()
-    if config.control_table:
-        formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    if config.control_table:        
+        formatted_control_table = get_control_table(config)
         logger.info("Formatted control table...", formatted_control_table)
         spark.sql(f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{formatted_control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)""")
 
@@ -1294,7 +1313,7 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         List[str]: A list of table names.
     """
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     queued_table_names = set()
     if spark.catalog.tableExists(control_table):
@@ -1341,7 +1360,7 @@ def upsert_table_names_to_control_table(table_names: List[str], config: Metadata
     """
     print(f"Upserting table names to control table {table_names}...")
     spark = SparkSession.builder.getOrCreate()
-    formatted_control_table = config.control_table.format(sanitize_email(get_current_user()))
+    formatted_control_table = get_control_table(config)
     control_table = f"{config.catalog_name}.{config.schema_name}.{formatted_control_table}"
     table_names = ensure_fully_scoped_table_names(table_names, config.catalog_name)
     table_names_df = spark.createDataFrame([(name,) for name in table_names], ["table_name"])
@@ -1428,7 +1447,13 @@ def generate_column_comment_ddl(full_table_name: str, column_name: str, comment:
     Returns:
         str: The DDL statement for adding the column comment to the table.
     """
-    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
+    dbr_number = os.environ.get('DATABRICKS_RUNTIME_VERSION')
+    if float(dbr_number) >= 16:
+        ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment(comment)}";"""
+    elif float(dbr_number) >=14 and float(dbr_number) < 16:
+        ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{cleanse_sql_comment(comment)}";"""
+    else: 
+        raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")
     return ddl_statement
 
 

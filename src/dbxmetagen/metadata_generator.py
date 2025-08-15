@@ -3,12 +3,16 @@ from abc import ABC, abstractmethod
 import json
 from pyspark.sql import SparkSession
 from pydantic import ValidationError
-from typing import Tuple, Dict, List, Any
-from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
+from typing import Tuple, Dict, List, Any, Union
+from openai.types.chat.chat_completion import (
+    Choice,
+    ChatCompletion,
+    ChatCompletionMessage,
+)
 import mlflow
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 from openai import OpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
 from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
@@ -21,26 +25,47 @@ class Response(BaseModel):
     table: str
     columns: List[str]
 
+
 class PIColumnContent(BaseModel):
     classification: str
     type: str
     confidence: float
 
+
 class PIResponse(Response):
     model_config = ConfigDict(extra="forbid")
     column_contents: List[PIColumnContent]
 
+
 class CommentResponse(Response):
     model_config = ConfigDict(extra="forbid")
-    column_contents: list[str]
+    column_contents: Union[str, list[str]]
+
+    @field_validator("column_contents")
+    @classmethod
+    def validate_column_contents(cls, v):
+        """Convert string to list if needed, otherwise return as is."""
+        if isinstance(v, str):
+            return [v]
+        elif isinstance(v, list):
+            return v
+        else:
+            raise ValueError(
+                "column_contents must be either a string or a list of strings"
+            )
+
 
 class SummaryCommentResponse(Response):
     pass
 
+
 class MetadataGenerator(ABC):
     @property
     def openai_client(self):
-        return OpenAI(api_key=os.environ["DATABRICKS_TOKEN"], base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints")
+        return OpenAI(
+            api_key=os.environ["DATABRICKS_TOKEN"],
+            base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints",
+        )
 
     def from_context(self, config):
         self.config = config
@@ -51,56 +76,94 @@ class MetadataGenerator(ABC):
 
 
 class CommentGenerator(MetadataGenerator):
-    def get_responses(self, config, prompt, prompt_content) -> Tuple[CommentResponse, ChatCompletion]:
+    def get_responses(
+        self, config, prompt, prompt_content
+    ) -> Tuple[CommentResponse, ChatCompletion]:
         if len(prompt) > self.config.max_prompt_length:
-            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
+            raise ValueError(
+                "The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length."
+            )
         comment_response, message_payload = self.get_comment_response(
             self.config,
             content=prompt_content,
             prompt_content=prompt[self.config.mode],
             model=self.config.model,
             max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature
+            temperature=self.config.temperature,
         )
         return comment_response, message_payload
 
     def predict_chat_response(self, prompt_content):
-        self.chat_response = ChatDatabricks(
-            endpoint=self.config.model,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens
-        ).with_structured_output(CommentResponse).invoke(prompt_content)
+        self.chat_response = (
+            ChatDatabricks(
+                endpoint=self.config.model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+            )
+            .with_structured_output(CommentResponse)
+            .invoke(prompt_content)
+        )
         return self.chat_response
 
-    def get_comment_response(self,
-                             config: MetadataConfig,
-                             content: str,
-                             prompt_content: str,
-                             model: str,
-                             max_tokens: int,
-                             temperature: float,
-                             retries: int = 0,
-                             max_retries: int = 5) -> Tuple[CommentResponse, Dict[str, Any]]:
+    def get_comment_response(
+        self,
+        config: MetadataConfig,
+        content: str,
+        prompt_content: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        retries: int = 0,
+        max_retries: int = 5,
+    ) -> Tuple[CommentResponse, Dict[str, Any]]:
         try:
-            chat_response = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+            chat_response = self._get_chat_completion(
+                config, prompt_content, model, max_tokens, temperature
+            )
             response_payload = None
             return chat_response, response_payload
         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
             if retries < max_retries:
-                print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
-                return self.get_comment_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+                print(f"Attempt {retries + 1} failed, retrying due to {e}...")
+                return self.get_comment_response(
+                    config,
+                    content,
+                    prompt_content,
+                    model,
+                    max_tokens,
+                    temperature,
+                    retries + 1,
+                    max_retries,
+                )
             else:
                 print("Validation error - response")
                 raise ValueError(f"Validation error after {max_retries} attempts: {e}")
 
-    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
+    def _get_chat_completion(
+        self,
+        config: MetadataConfig,
+        prompt_content: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        retries: int = 0,
+        max_retries: int = 3,
+    ) -> ChatCompletion:
         try:
             return self.predict_chat_response(prompt_content)
         except Exception as e:
             if retries < max_retries:
                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
                 exponential_backoff(retries)
-                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+                return self._get_chat_completion(
+                    config,
+                    prompt_content,
+                    model,
+                    max_tokens,
+                    temperature,
+                    retries + 1,
+                    max_retries,
+                )
             else:
                 print(f"Failed after {max_retries} retries.")
                 raise e
@@ -115,7 +178,9 @@ class CommentGenerator(MetadataGenerator):
             raise ValueError(f"JSON decode error: {e}")
 
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
+        if not self._check_list_and_dict_keys_match(
+            content["column_contents"]["columns"], response_dict["columns"]
+        ):
             raise ValueError("Column names do not match column contents")
 
     @staticmethod
@@ -135,59 +200,97 @@ class CommentGenerator(MetadataGenerator):
 
 
 class PIIdentifier(MetadataGenerator):
-    def get_responses(self, config, prompt, prompt_content) -> Tuple[PIResponse, ChatCompletion]:
+    def get_responses(
+        self, config, prompt, prompt_content
+    ) -> Tuple[PIResponse, ChatCompletion]:
         if len(prompt) > self.config.max_prompt_length:
-            raise ValueError("The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length.")
+            raise ValueError(
+                "The prompt template is too long. Please reduce the number of columns or increase the max_prompt_length."
+            )
         comment_response, message_payload = self.get_pi_response(
             self.config,
             content=prompt_content,
             prompt_content=prompt[self.config.mode],
             model=self.config.model,
             max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature
+            temperature=self.config.temperature,
         )
         return comment_response, message_payload
-    
+
     def predict_chat_response(self, prompt_content):
         try:
-            self.chat_response = ChatDatabricks(
-                endpoint=self.config.model,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-                ).with_structured_output(PIResponse).invoke(prompt_content)
+            self.chat_response = (
+                ChatDatabricks(
+                    endpoint=self.config.model,
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                )
+                .with_structured_output(PIResponse)
+                .invoke(prompt_content)
+            )
         except:
             print("Validation error - response \n\n\n response")
         return self.chat_response
-        
-    def get_pi_response(self,
-                             config: MetadataConfig,
-                             content: str,
-                             prompt_content: str,
-                             model: str,
-                             max_tokens: int,
-                             temperature: float,
-                             retries: int = 0,
-                             max_retries: int = 5) -> Tuple[PIResponse, Dict[str, Any]]:
+
+    def get_pi_response(
+        self,
+        config: MetadataConfig,
+        content: str,
+        prompt_content: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        retries: int = 0,
+        max_retries: int = 5,
+    ) -> Tuple[PIResponse, Dict[str, Any]]:
         try:
-            chat_response = self._get_chat_completion(config, prompt_content, model, max_tokens, temperature)
+            chat_response = self._get_chat_completion(
+                config, prompt_content, model, max_tokens, temperature
+            )
             response_payload = None
             return chat_response, response_payload
         except (ValidationError, json.JSONDecodeError, AttributeError, ValueError) as e:
             if retries < max_retries:
-                print(f"Attempt {retries + 1} failed for {response_payload.content}, retrying due to {e}...")
-                return self.get_pi_response(config, content, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+                print(f"Attempt {retries + 1} failed, retrying due to {e}...")
+                return self.get_pi_response(
+                    config,
+                    content,
+                    prompt_content,
+                    model,
+                    max_tokens,
+                    temperature,
+                    retries + 1,
+                    max_retries,
+                )
             else:
                 print("Validation error - response")
                 raise ValueError(f"Validation error after {max_retries} attempts: {e}")
 
-    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
+    def _get_chat_completion(
+        self,
+        config: MetadataConfig,
+        prompt_content: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        retries: int = 0,
+        max_retries: int = 3,
+    ) -> ChatCompletion:
         try:
             return self.predict_chat_response(prompt_content)
         except Exception as e:
             if retries < max_retries:
                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
                 exponential_backoff(retries)
-                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+                return self._get_chat_completion(
+                    config,
+                    prompt_content,
+                    model,
+                    max_tokens,
+                    temperature,
+                    retries + 1,
+                    max_retries,
+                )
             else:
                 print(f"Failed after {max_retries} retries.")
                 raise e
@@ -202,7 +305,9 @@ class PIIdentifier(MetadataGenerator):
             raise ValueError(f"JSON decode error: {e}")
 
     def _validate_response(self, content: str, response_dict: Dict[str, Any]) -> None:
-        if not self._check_list_and_dict_keys_match(content['column_contents']['columns'], response_dict['columns']):
+        if not self._check_list_and_dict_keys_match(
+            content["column_contents"]["columns"], response_dict["columns"]
+        ):
             raise ValueError("Column names do not match column contents")
 
     @staticmethod

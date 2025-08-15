@@ -64,7 +64,7 @@ def load_metadata_file(file_path: str, file_type: str) -> pd.DataFrame:
         if file_type == 'tsv':
             df = pd.read_csv(file_path, sep='\t', dtype=str)
         elif file_type == 'excel':
-            df = pd.read_excel(file_path, dtype=str)
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
         logging.info(f"Loaded file: {file_path}")
@@ -91,13 +91,13 @@ def get_pii_tags_from_ddl(ddl: str, classification: str, subclassification: str)
     if "ALTER COLUMN" not in ddl:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     return classification, subclassification
@@ -113,11 +113,21 @@ def replace_comment_in_ddl(ddl: str, new_comment: str) -> str:
             ddl
         )
     else:
-        ddl = re.sub(
-            r'(ALTER TABLE [^"\']+ COMMENT ON COLUMN [^ ]+ IS\s+)(["\'])(.*?)(["\'])',
-            lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-            ddl
-        )
+        dbr_number = os.environ.get('DATABRICKS_RUNTIME_VERSION')
+        if float(dbr_number) >= 16:
+            ddl = re.sub(
+                r'(ALTER TABLE [^"\']+ COMMENT ON COLUMN [^ ]+ IS\s+)(["\'])(.*?)(["\'])',
+                lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
+                ddl
+            )
+        elif float(dbr_number) >=14 and float(dbr_number) < 16:
+            ddl = re.sub(
+                r'(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ COMMENT\s+)(["\'])(.*?)(["\'])',
+                lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
+                ddl
+            )
+        else: 
+            raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")            
     return ddl
 
 def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: str) -> str:
@@ -127,13 +137,13 @@ def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: st
     if "ALTER COLUMN" not in ddl:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
-            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(4)}",
+            lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
             ddl
         )
     return ddl
@@ -144,7 +154,7 @@ def update_ddl_row(mode: str, reviewed_column: str, row: pd.Series) -> Union[str
     """
     if mode == 'pi':
         if reviewed_column == 'ddl':
-            new_classification, new_type = get_pii_tags_from_ddl(row['ddl'])
+            new_classification, new_type = get_pii_tags_from_ddl(row['ddl'], row['classification'], row['type'])
             return new_classification, new_type, row['ddl']
         elif reviewed_column in ('classification', 'type', 'other', 'column_content'):
             new_ddl = replace_pii_tags_in_ddl(row['ddl'], row['classification'], row['type'])
@@ -163,6 +173,15 @@ def update_ddl_row(mode: str, reviewed_column: str, row: pd.Series) -> Union[str
     else:
         raise ValueError("Unknown mode")
 
+
+def check_file_type(file_name: str, config: MetadataConfig) -> None:
+    if file_name.endswith('.xlsx') and config.review_input_file_type != 'excel':
+        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
+    elif file_name.endswith('.tsv') and config.review_input_file_type != 'tsv':
+        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
+    else:
+        return True
+    
 
 def export_metadata(
     df: pd.DataFrame,
@@ -231,9 +250,9 @@ def extract_ddls_from_file(file_path: str, file_type: str) -> list:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
             ddls = [ddl.strip() for ddl in content.split(';') if ddl.strip()]
-    elif file_type in ('xlsx', 'tsv'):
-        if file_type == 'xlsx':
-            df = pd.read_excel(file_path, dtype=str)
+    elif file_type in ('excel', 'tsv'):
+        if file_type == 'excel':
+            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
         else:
             df = pd.read_csv(file_path, sep='\t', dtype=str)
         if 'ddl' in df.columns:
@@ -270,23 +289,6 @@ def apply_ddl_to_databricks(sql_file: str, config: MetadataConfig, file_type: st
         raise
 
 
-def get_mode(
-    filename: str
-) -> str:
-    """
-    Determine the mode based on the environment.
-
-    Returns:
-        str: 'pi' or 'comment'.
-    """
-    if 'pi' in filename:
-        return 'pi' 
-    elif 'comment' in filename:
-        return 'comment'
-    else:
-        raise ValueError("Invalid mode. Must be either 'pi' or 'comment'.")
-
-
 def process_metadata_file(
     config: MetadataConfig,
     input_file: str,
@@ -300,6 +302,7 @@ def process_metadata_file(
         input_file (str): Path to the input file.
         export_format (Optional[str]): 'sql', 'tsv', or 'excel'. If None, uses config.
     """
+    file_check = check_file_type(input_file, config)
     try:
         sanitized_email = sanitize_email(config.current_user)
         current_date = datetime.now().strftime("%Y%m%d")
@@ -309,17 +312,16 @@ def process_metadata_file(
         )
         output_dir = os.path.join(
             "/Volumes", config.catalog_name, config.schema_name,
-            "generated_metadata", sanitized_email, current_date
+            "generated_metadata", sanitized_email, current_date, "exportable_run_logs"
         )
         input_file_type = config.review_input_file_type
         output_file_type = export_format or config.review_output_file_type 
         df = load_metadata_file(os.path.join(input_dir, input_file), input_file_type)
-        mode = get_mode(input_file)
-        if mode == 'pi':
+        if config.mode == 'pi':
             df[['classification', 'type', 'ddl']] = df.apply(
                 lambda row: update_ddl_row('pi', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
             )
-        elif mode == 'comment':
+        elif config.mode == 'comment':
             df[['column_content', 'ddl']] = df.apply(
                 lambda row: update_ddl_row('comment', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
             )
