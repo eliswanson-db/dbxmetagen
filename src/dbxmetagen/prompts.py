@@ -154,29 +154,59 @@ class Prompt(ABC):
         """
         column_metadata_dict = {}
         for column_name in self.prompt_content["column_contents"]["columns"]:
+            print(f"[DEBUG] Extracting metadata for column: {column_name}")
+
             extended_metadata_df = self.spark.sql(
                 f"DESCRIBE EXTENDED {self.full_table_name} `{column_name}`"
             )
+
+            print(f"[DEBUG] DESCRIBE EXTENDED schema for {column_name}:")
+            extended_metadata_df.printSchema()
+            print(
+                f"[DEBUG] DESCRIBE EXTENDED row count: {extended_metadata_df.count()}"
+            )
+
+            # Sample a few rows to see what the data looks like
+            try:
+                sample_rows = extended_metadata_df.limit(3).collect()
+                print(f"[DEBUG] Sample DESCRIBE EXTENDED rows for {column_name}:")
+                for i, row in enumerate(sample_rows):
+                    print(f"  Row {i}: {dict(row.asDict())}")
+            except Exception as e:
+                print(f"[DEBUG] Error sampling DESCRIBE EXTENDED rows: {e}")
+
             filtered_metadata_df = self.filter_extended_metadata_fields(
                 extended_metadata_df
             )
 
-            # Convert DECIMAL columns to DOUBLE for efficient pandas conversion
-            from pyspark.sql.types import DecimalType
-            from pyspark.sql.functions import col
+            print(f"[DEBUG] Filtered metadata schema for {column_name}:")
+            filtered_metadata_df.printSchema()
+            print(
+                f"[DEBUG] Filtered metadata row count: {filtered_metadata_df.count()}"
+            )
 
-            decimal_columns = [
-                field.name
-                for field in filtered_metadata_df.schema.fields
-                if isinstance(field.dataType, DecimalType)
-            ]
-            if decimal_columns:
-                for col_name in decimal_columns:
-                    filtered_metadata_df = filtered_metadata_df.withColumn(
-                        col_name, col(col_name).cast("double")
-                    )
+            # Check if the filtered DataFrame is empty or has problematic data
+            try:
+                filtered_sample = filtered_metadata_df.limit(3).collect()
+                print(f"[DEBUG] Sample filtered rows for {column_name}:")
+                for i, row in enumerate(filtered_sample):
+                    print(f"  Row {i}: {dict(row.asDict())}")
+            except Exception as e:
+                print(f"[DEBUG] Error sampling filtered rows: {e}")
 
-            column_metadata = filtered_metadata_df.toPandas().to_dict(orient="list")
+            try:
+                column_metadata = filtered_metadata_df.toPandas().to_dict(orient="list")
+                print(f"[DEBUG] Pandas conversion successful for {column_name}")
+                print(f"[DEBUG] Column metadata keys: {list(column_metadata.keys())}")
+                print(
+                    f"[DEBUG] Column metadata sample: {str(column_metadata)[:200]}..."
+                )
+            except Exception as e:
+                print(f"[DEBUG] ERROR in pandas conversion for {column_name}: {e}")
+                # Try to get more details about the error
+                print(f"[DEBUG] DataFrame dtypes: {filtered_metadata_df.dtypes}")
+                raise
+
             combined_metadata = dict(
                 zip(column_metadata["info_name"], column_metadata["info_value"])
             )
@@ -184,6 +214,8 @@ class Prompt(ABC):
                 column_name, combined_metadata
             )
             column_metadata_dict[column_name] = combined_metadata
+            print(f"[DEBUG] Successfully processed metadata for column: {column_name}")
+
         return column_metadata_dict
 
     def get_column_constraints(
@@ -443,7 +475,7 @@ class CommentPrompt(Prompt):
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. Domains seen include MSN and AOL. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to False, but as a string rather than as a boolean value."]}""",
+                    "content": """{"table": "Predictable recurring revenue earned from customers in a specific period. Monthly recurring revenue, or MRR, is calculated on a monthly duration and in this case aggregated at a customer level. This table includes customer names, addresses, emails, and other identifying information as well as system colums.", "columns": ["name", "address", "email", "revenue", "eap_created", "delete_flag"], "column_contents": ["Customer's first and last name.", "Customer mailing address including both the number and street name, but not including the city, state, country, or zipcode. Stored as a string and populated in all cases. At least 46 distinct values.", "Customer email address with domain name. This is a common format for email addresses. These are not likely domains for company email addresses. Email field is always populated, although there appears to be very few distinct values in the table.", "Monthly recurring revenue from the customer in United States dollars with two decimals for cents. This field is never null, and only has 10 distinct values, odd for an MRR field.", "Date when the record was created in the Enterprise Architecture Platform or by the Enterprise Architecture Platform team.", "Flag indicating whether the record has been deleted from the system. Most likely this is a soft delete flag, indicating a hard delete in an upstream system. Every value appears to be the same in this column - based on the sample and the metadata it appears that every value is set to the same value, but as a string rather than as a boolean value."]}""",
                 },
                 {
                     "role": "user",
@@ -451,7 +483,7 @@ class CommentPrompt(Prompt):
                 },
                 {
                     "role": "assistant",
-                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, typically on a scale of 1 to 5. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values: 'Yes' and 'No'. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}""",
+                    "content": """{"table": "Employee performance reviews conducted annually. This table includes employee IDs, review dates, performance scores, manager comments, and promotion recommendations.", "columns": ["employee_id", "review_date", "performance_score", "manager_comments", "promotion_recommendation"], "column_contents": ["Unique identifier for each employee. This field is always populated and has 100 distinct values. The average and maximum column lengths are both 4, indicating a consistent format for employee IDs.", "Date when the performance review was conducted. This field is always populated and has only one distinct value in the sample, suggesting that all reviews were conducted on the same date. The average and maximum column lengths are both 10, consistent with the date format 'YYYY-MM-DD'.", "Performance score given by the manager, representing single digit integers. This field is always populated and has 50 distinct values. The average and maximum column lengths are both 3, indicating a consistent format for performance scores.", "Comments provided by the manager during the performance review. This field is always populated and has 100 distinct values, one for each employee, so these are fairly unique comments for each employee. The average column length is 30 and the maximum column length is 100, indicating a wide range of comment lengths, though given the skew there are probably a large number of very short comments.", "Recommendation for promotion based on the performance review. This field is always populated and has two distinct values. The average and maximum column lengths are both 3, indicating a consistent format for promotion recommendations."]}""",
                 },
                 {
                     "role": "user",

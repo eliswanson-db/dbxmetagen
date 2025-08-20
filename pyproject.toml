@@ -6,7 +6,7 @@ readme = "README.md"
 authors = ["Eli Swanson <eli.swanson@databricks.com>", "James McCall <james.mccall@databricks.com>"]
 maintainers = ["Eli Swanson <eli.swanson@databricks.com>"]
 license = "DB License"
-requires-poetry = "==2.0.*"
+requires-poetry = ">=2.0.*"
 packages = [
     { include = "dbxmetagen", from = "src" }
 ]

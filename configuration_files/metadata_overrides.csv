@@ -1,0 +1,3 @@
+catalog,schema,table,column,comment,classification,type
+,,,ssn,,pi,pii
+,,,_rescued_data, Databricks rescue data column. When Auto Loader infers the schema a rescued data column is automatically added to your schema as _rescued_data. You can rename the column or include it in cases where you provide a schema by setting the option rescuedDataColumn. The rescued data column ensures that columns that don’t match with the schema are rescued instead of being dropped.,,

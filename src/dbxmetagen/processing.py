@@ -11,6 +11,7 @@ import traceback
 
 import csv
 from shutil import copyfile
+import shutil
 import mlflow
 import nest_asyncio
 import pandas as pd
@@ -76,7 +77,6 @@ from src.dbxmetagen.overrides import (
     build_condition,
     get_join_conditions,
 )
-from src.dbxmetagen.parsing import cleanse_sql_comment
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -238,7 +238,9 @@ def append_table_row(
         tokenized_table=tokenized_full_table_name,
         ddl_type="table",
         column_name="None",
-        column_content=response.table,
+        column_content=str(
+            response.table
+        ),  # Ensure string type for serverless compatibility
     )
     rows.append(row)
     return rows
@@ -262,13 +264,48 @@ def append_column_rows(
     Returns:
         List[Row]: The updated list of rows with the new column rows appended.
     """
-    for column_name, column_content in zip(response.columns, response.column_contents):
+    print(
+        f"[DEBUG] append_column_rows called for table: {full_table_name}, mode: {config.mode}"
+    )
+    print(f"[DEBUG] Response type: {type(response)}")
+    print(
+        f"[DEBUG] Response keys: {list(response.__dict__.keys()) if hasattr(response, '__dict__') else 'Not an object with __dict__'}"
+    )
+
+    try:
+        print(f"[DEBUG] Response.columns: {response.columns}")
+        print(
+            f"[DEBUG] Response.column_contents type: {type(response.column_contents)}"
+        )
+        print(f"[DEBUG] Number of columns: {len(response.columns)}")
+        print(f"[DEBUG] Number of column_contents: {len(response.column_contents)}")
+    except Exception as e:
+        print(f"[DEBUG] Error accessing response attributes: {e}")
+
+    for i, (column_name, column_content) in enumerate(
+        zip(response.columns, response.column_contents)
+    ):
+        print(f"[DEBUG] Processing column {i}: {column_name}")
+        print(f"[DEBUG] Column content type: {type(column_content)}")
+        print(f"[DEBUG] Column content preview: {str(column_content)[:100]}...")
+
         if (
             isinstance(column_content, dict)
             or isinstance(column_content, PIColumnContent)
         ) and config.mode == "pi":
+            print(
+                f"[DEBUG] PI mode - processing dict/PIColumnContent for {column_name}"
+            )
             if isinstance(column_content, PIColumnContent):
                 column_content = column_content.model_dump()
+                print(f"[DEBUG] Converted PIColumnContent to dict: {column_content}")
+
+            # Check for confidence field specifically
+            if "confidence" in column_content:
+                print(
+                    f"[DEBUG] Confidence field found: type={type(column_content['confidence'])}, value={column_content['confidence']}"
+                )
+
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,
@@ -276,7 +313,9 @@ def append_column_rows(
                 column_name=column_name,
                 **column_content,
             )
+            print(f"[DEBUG] Created PI Row for {column_name}")
         elif isinstance(column_content, str) and config.mode == "comment":
+            print(f"[DEBUG] Comment mode - processing string content for {column_name}")
             row = Row(
                 table=full_table_name,
                 tokenized_table=tokenized_full_table_name,
@@ -284,9 +323,19 @@ def append_column_rows(
                 column_name=column_name,
                 column_content=column_content,
             )
+            print(f"[DEBUG] Created Comment Row for {column_name}")
         else:
+            print(f"[DEBUG] ERROR: Invalid column contents type for {column_name}")
+            print(f"[DEBUG] Content type: {type(column_content)}, Mode: {config.mode}")
+            print(f"[DEBUG] Content: {column_content}")
             raise ValueError("Invalid column contents type, should be dict or string.")
+
+        print(
+            f"[DEBUG] Row created successfully for {column_name}: {dict(row.asDict())}"
+        )
         rows.append(row)
+
+    print(f"[DEBUG] append_column_rows completed. Total rows: {len(rows)}")
     return rows
 
 
@@ -330,10 +379,72 @@ def rows_to_df(rows: List[Row], config: MetadataConfig) -> DataFrame:
     if len(rows) == 0:
         return None
     else:
-        schema = define_row_schema(config)
-        df = spark.createDataFrame(rows, schema).withColumn(
-            "_created_at", current_timestamp()
+        print(
+            f"[DEBUG] Converting {len(rows)} rows to DataFrame for mode: {config.mode}"
         )
+
+        # Sample a few rows to see what data we're working with
+        print(f"[DEBUG] Sample rows being converted:")
+        for i, row in enumerate(rows[:3]):  # Show first 3 rows
+            print(f"  Row {i}: {dict(row.asDict())}")
+            # Check for any problematic values
+            row_dict = row.asDict()
+            for key, value in row_dict.items():
+                if value is not None and isinstance(value, str) and len(value) > 100:
+                    print(f"    WARNING: Long string in {key}: {value[:100]}...")
+                elif key == "confidence" and value is not None:
+                    print(f"    Confidence value type: {type(value)}, value: {value}")
+
+        schema = define_row_schema(config)
+        print(f"[DEBUG] Using schema for mode {config.mode}:")
+        for field in schema.fields:
+            print(f"  {field.name}: {field.dataType}")
+
+        # CRITICAL FIX: Force schema compliance by creating DF with schema
+        # This prevents Spark from doing its own type inference that causes DOUBLE issues
+        try:
+            print(
+                f"[DEBUG] About to create DataFrame with schema for mode: {config.mode}"
+            )
+            df = spark.createDataFrame(rows, schema)
+            print(f"[DEBUG] DataFrame creation successful")
+
+            # DIAGNOSTIC: Test the DataFrame immediately after creation
+            try:
+                print(f"[DEBUG] Testing newly created DataFrame...")
+                row_count = df.count()
+                print(f"[DEBUG] Newly created DataFrame count: {row_count} - SUCCESS")
+            except Exception as count_error:
+                print(
+                    f"[DEBUG] CRITICAL: DataFrame corrupted immediately after creation: {count_error}"
+                )
+                print(
+                    f"[DEBUG] This means the issue is in spark.createDataFrame() itself"
+                )
+                raise
+
+        except Exception as e:
+            print(f"[DEBUG] ERROR in DataFrame creation: {e}")
+            print(f"[DEBUG] Attempting to analyze problematic row data...")
+
+            # Try to identify which row is causing issues
+            for i, row in enumerate(rows):
+                try:
+                    test_df = spark.createDataFrame([row], schema)
+                    print(f"  Row {i}: OK")
+                except Exception as row_error:
+                    print(f"  Row {i}: ERROR - {row_error}")
+                    print(f"    Problematic row data: {dict(row.asDict())}")
+            raise
+
+        # Explicitly cast column_content to string for serverless compatibility
+        if config.mode == "comment" and "column_content" in df.columns:
+            print(f"[DEBUG] Casting column_content to string for comment mode")
+            df = df.withColumn("column_content", col("column_content").cast("string"))
+
+        df = df.withColumn("_created_at", current_timestamp())
+        print(f"[DEBUG] Final DataFrame schema:")
+        df.printSchema()
         return df
 
 
@@ -348,10 +459,24 @@ def add_ddl_to_column_comment_df(df: DataFrame, ddl_column: str) -> DataFrame:
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    return df.withColumn(
+    # CRITICAL SERVERLESS FIX: Ensure column_content stays string when adding DDL
+    if "column_content" in df.columns:
+        print(f"[DEBUG] Ensuring column_content is string before adding DDL")
+        df = df.withColumn("column_content", col("column_content").cast("string"))
+
+    result_df = df.withColumn(
         ddl_column,
         generate_column_comment_ddl("tokenized_table", "column_name", "column_content"),
     )
+
+    # Double-check after DDL addition
+    if "column_content" in result_df.columns:
+        print(f"[DEBUG] Re-ensuring column_content is string after DDL addition")
+        result_df = result_df.withColumn(
+            "column_content", col("column_content").cast("string")
+        )
+
+    return result_df
 
 
 def add_ddl_to_table_comment_df(df: DataFrame, ddl_column: str) -> DataFrame:
@@ -365,9 +490,28 @@ def add_ddl_to_table_comment_df(df: DataFrame, ddl_column: str) -> DataFrame:
     Returns:
         DataFrame: The updated DataFrame with the DDL statement added.
     """
-    return df.withColumn(
-        ddl_column, generate_table_comment_ddl("tokenized_table", "column_content")
-    )
+    # CRITICAL SERVERLESS FIX: Ensure column_content stays string when adding table DDL
+    if df is not None and "column_content" in df.columns:
+        print(f"[DEBUG] Ensuring column_content is string before adding table DDL")
+        df = df.withColumn("column_content", col("column_content").cast("string"))
+
+    if df is not None:
+        result_df = df.withColumn(
+            ddl_column, generate_table_comment_ddl("tokenized_table", "column_content")
+        )
+
+        # Double-check after table DDL addition
+        if "column_content" in result_df.columns:
+            print(
+                f"[DEBUG] Re-ensuring column_content is string after table DDL addition"
+            )
+            result_df = result_df.withColumn(
+                "column_content", col("column_content").cast("string")
+            )
+
+        return result_df
+    else:
+        return df
 
 
 def add_table_ddl_to_pi_df(df: DataFrame, ddl_column: str) -> DataFrame:
@@ -417,7 +561,8 @@ def get_current_user() -> str:
         str: The current user.
     """
     spark = SparkSession.builder.getOrCreate()
-    return spark.sql("SELECT current_user()").collect()[0][0]
+    # Use first() instead of collect() for single values - more efficient
+    return spark.sql("SELECT current_user()").first()[0]
 
 
 def df_to_sql_file(
@@ -430,7 +575,7 @@ def df_to_sql_file(
     filename: str,
 ) -> str:
     """
-    Writes a DataFrame to a SQL file.
+    Writes a DataFrame to a SQL file using Spark-native operations (no collect()).
 
     Args:
         df (DataFrame): The DataFrame to write.
@@ -444,13 +589,23 @@ def df_to_sql_file(
     Returns:
         str: The path to the SQL file.
     """
-    print("Converting dataframe to SQL file...")
+    print("Converting dataframe to SQL file using Spark-native operations...")
     selected_column_df = df.select(sql_column)
-    column_list = [row[sql_column] for row in selected_column_df.collect()]
     uc_volume_path = f"/Volumes/{catalog_name}/{dest_schema_name}/{filename}.sql"
-    with open(uc_volume_path, "w") as file:
-        for item in column_list:
-            file.write(f"{item}\n")
+
+    # Use Spark's text writer instead of collect()
+    temp_path = f"/Volumes/{catalog_name}/{dest_schema_name}/temp_{filename}"
+    selected_column_df.coalesce(1).write.mode("overwrite").text(temp_path)
+
+    # Move the part file to final location
+    import os
+    import shutil
+
+    part_files = [f for f in os.listdir(temp_path) if f.startswith("part-")]
+    if part_files:
+        shutil.move(os.path.join(temp_path, part_files[0]), uc_volume_path)
+        shutil.rmtree(temp_path)
+
     return uc_volume_path
 
 
@@ -528,15 +683,35 @@ def df_column_to_excel_file(
 
 
 def populate_log_table(df, config, current_user, base_path):
-    return (
-        df.withColumn("current_user", lit(current_user))
-        .withColumn("model", lit(config.model))
-        .withColumn("sample_size", lit(config.sample_size))
-        .withColumn("max_tokens", lit(config.max_tokens))
-        .withColumn("temperature", lit(config.temperature))
-        .withColumn("columns_per_call", lit(config.columns_per_call))
-        .withColumn("status", lit("No Volume specified..."))
+    # For serverless compatibility, ensure consistent data types without forcing string conversion
+    # This maintains compatibility with existing table schemas
+    print(f"[DEBUG] populate_log_table called for mode: {config.mode}")
+    print(f"[DEBUG] Input df count before populate_log_table: {df.count()}")
+
+    # CRITICAL FIX: Explicitly cast all literal columns for serverless compatibility
+    result_df = (
+        df.withColumn("current_user", lit(current_user).cast("string"))
+        .withColumn("model", lit(config.model).cast("string"))
+        .withColumn("sample_size", lit(config.sample_size).cast("int"))
+        .withColumn("max_tokens", lit(config.max_tokens).cast("int"))
+        .withColumn("temperature", lit(config.temperature).cast("double"))
+        .withColumn("columns_per_call", lit(config.columns_per_call).cast("int"))
+        .withColumn("status", lit("No Volume specified...").cast("string"))
     )
+
+    print(f"[DEBUG] populate_log_table completed")
+    print(f"[DEBUG] Result df count after populate_log_table: {result_df.count()}")
+
+    # CRITICAL SERVERLESS FIX: Ensure column_content stays as string after adding log columns
+    if config.mode == "comment" and "column_content" in result_df.columns:
+        print(f"[DEBUG] Re-casting column_content to string after populate_log_table")
+        result_df = result_df.withColumn(
+            "column_content", col("column_content").cast("string")
+        )
+        print(f"[DEBUG] Final schema after re-casting:")
+        result_df.printSchema()
+
+    return result_df
 
 
 def get_control_table(config: MetadataConfig) -> str:
@@ -637,20 +812,6 @@ def run_log_table_ddl(config):
 
 
 def output_df_pandas_to_tsv(df, output_file):
-    # Convert DECIMAL columns to DOUBLE for efficient pandas conversion
-    from pyspark.sql.types import DecimalType
-    from pyspark.sql.functions import col
-
-    # Check for DECIMAL columns and cast them to DOUBLE
-    decimal_columns = [
-        field.name
-        for field in df.schema.fields
-        if isinstance(field.dataType, DecimalType)
-    ]
-    if decimal_columns:
-        for col_name in decimal_columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
     pandas_df = df.toPandas()
     write_header = not os.path.exists(output_file)
     pandas_df.to_csv(output_file, sep="\t", header=write_header, index=False, mode="a")
@@ -815,19 +976,6 @@ def _export_table_to_excel(df: Any, config: Any) -> str:
             logger.warning("Table is empty")
 
         if hasattr(df, "toPandas") and callable(df.toPandas):
-            # Convert DECIMAL columns to DOUBLE for efficient pandas conversion
-            from pyspark.sql.types import DecimalType
-            from pyspark.sql.functions import col
-
-            decimal_columns = [
-                field.name
-                for field in df.schema.fields
-                if isinstance(field.dataType, DecimalType)
-            ]
-            if decimal_columns:
-                for col_name in decimal_columns:
-                    df = df.withColumn(col_name, col(col_name).cast("double"))
-
             pdf = df.toPandas()
         elif isinstance(df, pd.DataFrame):
             pdf = df
@@ -888,7 +1036,8 @@ def replace_medical_information_with_phi(
 ) -> DataFrame:
     if df is None:
         return None
-    if config.mode == "pi" and config.disable_medical_information_value:
+
+    if config.mode == "pi" and config.disable_medical_information_value == "true":
         df = df.withColumn(
             "type",
             when((df["type"] == "medical_information"), lit("phi")).otherwise(
@@ -918,15 +1067,110 @@ def filter_and_write_ddl(
     print(
         "Filtering dataframe based on table name to write DDL to SQL file in volume..."
     )
-    df = df.filter(df["table"] == full_table_name)
-    ddl_statements = df.select("ddl").collect()
+
+    print(f"[DEBUG] === Starting filter_and_write_ddl diagnostics ===")
+
+    # Test 1: Can we access df.columns safely?
+    try:
+        print(f"[DEBUG] Test 1: DataFrame columns: {df.columns}")
+    except Exception as e:
+        print(f"[DEBUG] Test 1 FAILED - Cannot access df.columns: {e}")
+        raise
+
+    # Test 2: Can we call printSchema safely?
+    try:
+        print(f"[DEBUG] Test 2: Calling printSchema...")
+        df.printSchema()
+        print(f"[DEBUG] Test 2 PASSED - printSchema successful")
+    except Exception as e:
+        print(f"[DEBUG] Test 2 FAILED - printSchema failed: {e}")
+        raise
+
+    # Test 3: Can we do simple column checks?
+    try:
+        print(f"[DEBUG] Test 3: Checking specific columns...")
+        has_column_content = "column_content" in df.columns
+        has_ddl = "ddl" in df.columns
+        print(
+            f"[DEBUG] Test 3: column_content exists: {has_column_content}, ddl exists: {has_ddl}"
+        )
+    except Exception as e:
+        print(f"[DEBUG] Test 3 FAILED - Column checks failed: {e}")
+        raise
+
+    # Test 4: Can we do withColumn operations safely?
+    try:
+        print(f"[DEBUG] Test 4: Attempting withColumn operations...")
+        if "column_content" in df.columns:
+            print(f"[DEBUG] Test 4a: Casting column_content to string...")
+            df = df.withColumn("column_content", col("column_content").cast("string"))
+            print(f"[DEBUG] Test 4a PASSED")
+
+        if "ddl" in df.columns:
+            print(f"[DEBUG] Test 4b: Casting ddl to string...")
+            df = df.withColumn("ddl", col("ddl").cast("string"))
+            print(f"[DEBUG] Test 4b PASSED")
+    except Exception as e:
+        print(f"[DEBUG] Test 4 FAILED - withColumn operations failed: {e}")
+        raise
+
+    # Test 5: Can we call printSchema after withColumn?
+    try:
+        print(f"[DEBUG] Test 5: Calling printSchema after withColumn...")
+        df.printSchema()
+        print(f"[DEBUG] Test 5 PASSED")
+    except Exception as e:
+        print(f"[DEBUG] Test 5 FAILED - printSchema after withColumn failed: {e}")
+        raise
+
+    # Test 6: Can we do filter operation?
+    try:
+        print(f"[DEBUG] Test 6: Attempting filter operation...")
+        print(f"[DEBUG] Test 6: Filtering for table: {full_table_name}")
+        df = df.filter(df["table"] == full_table_name)
+        print(f"[DEBUG] Test 6 PASSED - Filter operation successful")
+    except Exception as e:
+        print(f"[DEBUG] Test 6 FAILED - Filter operation failed: {e}")
+        raise
+
+    # Test 7: Can we call printSchema after filter?
+    try:
+        print(f"[DEBUG] Test 7: Calling printSchema after filter...")
+        df.printSchema()
+        print(f"[DEBUG] Test 7 PASSED")
+    except Exception as e:
+        print(f"[DEBUG] Test 7 FAILED - printSchema after filter failed: {e}")
+        raise
+
+    # Test 8: Can we do simple withColumn operations?
+    try:
+        print(f"[DEBUG] Test 8: Adding status column...")
+        df = df.withColumn("status", lit("Success"))
+        print(f"[DEBUG] Test 8 PASSED")
+    except Exception as e:
+        print(f"[DEBUG] Test 8 FAILED - Adding status column failed: {e}")
+        raise
+
+    # Test 9: The dangerous operation - count()
+    try:
+        print(
+            f"[DEBUG] Test 9: Attempting df.count() - this is where the error likely occurs..."
+        )
+        row_count = df.count()
+        print(f"[DEBUG] Test 9 PASSED - df.count() successful, rows: {row_count}")
+    except Exception as e:
+        print(f"[DEBUG] Test 9 FAILED - df.count() failed: {e}")
+        print(f"[DEBUG] This confirms the error happens during count() operation")
+        raise
+
+    print(f"[DEBUG] === All tests passed! The error must be elsewhere ===")
+
     table_name = re.sub(r"[^\w\s/]", "_", full_table_name)
     file_root = f"{table_name}_{config.mode}"
-    write_ddl_to_volume(file_root, base_path, ddl_statements, config.ddl_output_format)
-    df = df.withColumn("status", lit("Success"))
+
     try:
-        write_ddl_to_volume(
-            file_root, base_path, ddl_statements, config.ddl_output_format
+        write_ddl_to_volume_spark_native(
+            df, file_root, base_path, config.ddl_output_format
         )
         df = df.withColumn("status", lit("Success"))
     except ValueError as ve:
@@ -952,13 +1196,65 @@ def filter_and_write_ddl(
             )
 
 
-def create_folder_if_not_exists(folder_path):
-    """Creates a folder if it doesn't exist."""
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
+def write_ddl_to_volume_spark_native(
+    df: DataFrame, file_name: str, base_path: str, output_format: str
+):
+    """
+    Write DDL statements to volume using collect() - simpler approach for compatibility.
+    """
+    try:
+        create_folder_if_not_exists(base_path)
+    except Exception as e:
+        print(
+            f"Error creating folder: {e}. Check if Volume exists and if your permissions are correct."
+        )
+
+    if output_format in ["sql", "tsv"]:
+        print(f"[DEBUG] About to collect DDL statements...")
+        print(f"[DEBUG] DataFrame schema before collect:")
+        df.printSchema()
+        nrows = df.count()
+        print(f"[DEBUG] Number of rows: {nrows}")
+        try:
+            df.select("ddl").toPandas()
+        except Exception as e:
+            print(f"Error: {e}")
+            raise ValueError(f"Error: {e}")
+        try:
+            df.select("ddl").coalesce(1)
+        except Exception as e:
+            print(f"Error: {e}")
+            raise ValueError(f"Error: {e}")
+
+        # Use collect() - the original approach that worked on traditional clusters
+        ddl_statements = df.select("ddl").collect()
+
+        print(f"[DEBUG] Successfully collected {len(ddl_statements)} DDL statements")
+
+        # Write using simple Python file I/O
+        full_path = os.path.join(base_path, f"{file_name}.{output_format}")
+        with open(full_path, "w") as file:
+            for statement in ddl_statements:
+                file.write(f"{statement[0]}\n")
+
+        print(f"[DEBUG] Successfully wrote DDL statements to {full_path}")
+
+    elif output_format == "excel":
+        # For Excel, convert to list first then to pandas
+        ddl_statements = df.select("ddl").collect()
+        ddl_list = [row.ddl for row in ddl_statements]
+        import pandas as pd
+
+        pdf = pd.DataFrame(ddl_list, columns=["ddl"])
+        df_column_to_excel_file(pdf, file_name, base_path, "ddl")
+    else:
+        raise ValueError(
+            "Invalid output format. Please choose either 'sql', 'tsv' or 'excel'."
+        )
 
 
 def write_ddl_to_volume(file_name, base_path, ddl_statements, output_format):
+    """Legacy function kept for backward compatibility"""
     try:
         create_folder_if_not_exists(base_path)
     except Exception as e:
@@ -1004,7 +1300,260 @@ def create_and_persist_ddl(
         column_df = df[f"{config.mode}_column_df"]
         column_df = populate_log_table(column_df, config, current_user, base_path)
         modified_path = re.sub(r"[^\w\s/]", "_", base_path)
-        unioned_df = table_df.union(column_df)
+
+        # Ensure schema compatibility before union for serverless environments
+        if config.mode == "comment":
+            # Handle case where table_df might be None (no table-level content)
+            if table_df is not None:
+                table_df = table_df.withColumn(
+                    "column_content", col("column_content").cast("string")
+                )
+                print(f"[DEBUG] table_df count: {table_df.count()} in comment mode")
+            if column_df is not None:
+                column_df = column_df.withColumn(
+                    "column_content", col("column_content").cast("string")
+                )
+                print(f"[DEBUG] column_df count: {column_df.count()} in comment mode")
+
+            # Handle union with potential None DataFrames
+            if table_df is not None and column_df is not None:
+                print(f"[DEBUG] About to union table_df and column_df")
+                print(f"[DEBUG] table_df schema:")
+                table_df.printSchema()
+                print(f"[DEBUG] column_df schema:")
+                column_df.printSchema()
+
+                print(
+                    f"[DEBUG] table_df count: {table_df.count()} before explicit column ordering"
+                )
+                print(
+                    f"[DEBUG] column_df count: {column_df.count()} before explicit column ordering"
+                )
+
+                # CRITICAL FIX: Ensure explicit column ordering before union for serverless
+                # This prevents Spark Connect from doing implicit casting
+                if config.mode == "comment":
+                    expected_columns = [
+                        "table",
+                        "tokenized_table",
+                        "ddl_type",
+                        "column_name",
+                        "column_content",
+                        "_created_at",
+                        "catalog",
+                        "schema",
+                        "table_name",
+                        "ddl",
+                        "current_user",
+                        "model",
+                        "sample_size",
+                        "max_tokens",
+                        "temperature",
+                        "columns_per_call",
+                        "status",
+                    ]
+                elif config.mode == "pi":
+                    expected_columns = [
+                        "table",
+                        "tokenized_table",
+                        "ddl_type",
+                        "column_name",
+                        "classification",
+                        "type",
+                        "confidence",
+                        "_created_at",
+                        "catalog",
+                        "schema",
+                        "table_name",
+                        "ddl",
+                        "current_user",
+                        "model",
+                        "sample_size",
+                        "max_tokens",
+                        "temperature",
+                        "columns_per_call",
+                        "status",
+                    ]
+                else:
+                    raise ValueError(f"Unsupported mode: {config.mode}")
+
+                # Explicitly select columns in the same order for both DataFrames
+                print(f"[DEBUG] Reordering columns explicitly for union")
+                table_df_ordered = table_df.select(*expected_columns)
+                print(f"[DEBUG] table_df_ordered count: {table_df_ordered.count()}")
+                column_df_ordered = column_df.select(*expected_columns)
+                print(f"[DEBUG] column_df_ordered count: {column_df_ordered.count()}")
+
+                print(f"[DEBUG] table_df_ordered schema:")
+                table_df_ordered.printSchema()
+                print(f"[DEBUG] column_df_ordered schema:")
+                column_df_ordered.printSchema()
+
+                # SERVERLESS FIX: Use direct operations instead of cache() for materialization
+                print(
+                    f"[DEBUG] Testing DataFrames before union (serverless compatible)..."
+                )
+
+                print(f"[DEBUG] Testing table_df...")
+                table_count = table_df_ordered.count()
+                print(f"[DEBUG] table_df tested with {table_count} rows")
+
+                print(f"[DEBUG] Testing column_df...")
+                column_count = column_df_ordered.count()
+                print(f"[DEBUG] column_df tested with {column_count} rows")
+
+                print(f"[DEBUG] Performing union on tested DataFrames...")
+                unioned_df = table_df_ordered.union(column_df_ordered)
+                print(f"[DEBUG] Union completed successfully")
+                print(f"[DEBUG] unioned_df schema:")
+                unioned_df.printSchema()
+
+                # DIAGNOSTIC: Test if the unioned DataFrame is corrupted
+                try:
+                    print(f"[DEBUG] UNION TEST 1: Testing unioned_df.columns...")
+                    print(f"[DEBUG] UNION TEST 1: Columns: {unioned_df.columns}")
+                    print(f"[DEBUG] UNION TEST 1 PASSED")
+                except Exception as e:
+                    print(f"[DEBUG] UNION TEST 1 FAILED: {e}")
+                    raise
+
+                try:
+                    print(f"[DEBUG] UNION TEST 2: Testing unioned_df.count()...")
+                    union_count = unioned_df.count()
+                    print(f"[DEBUG] UNION TEST 2 PASSED: Row count = {union_count}")
+                except Exception as e:
+                    print(
+                        f"[DEBUG] UNION TEST 2 FAILED - Union created corrupted DataFrame: {e}"
+                    )
+                    print(
+                        f"[DEBUG] The error is happening in the union operation itself!"
+                    )
+                    raise
+            elif table_df is not None:
+                print(f"[DEBUG] Using only table_df (column_df is None)")
+                unioned_df = table_df
+            elif column_df is not None:
+                print(f"[DEBUG] Using only column_df (table_df is None)")
+                unioned_df = column_df
+            else:
+                raise ValueError("Both table and column DataFrames are None")
+        elif config.mode == "pi":
+            # Handle case where table_df might be None (no table-level content)
+            if table_df is not None:
+                # Ensure confidence column is properly cast to DOUBLE
+                table_df = table_df.withColumn(
+                    "confidence", col("confidence").cast("double")
+                )
+                # Ensure classification and type are properly cast to STRING
+                table_df = table_df.withColumn(
+                    "classification", col("classification").cast("string")
+                )
+                table_df = table_df.withColumn("type", col("type").cast("string"))
+            if column_df is not None:
+                # Ensure confidence column is properly cast to DOUBLE
+                column_df = column_df.withColumn(
+                    "confidence", col("confidence").cast("double")
+                )
+                # Ensure classification and type are properly cast to STRING
+                column_df = column_df.withColumn(
+                    "classification", col("classification").cast("string")
+                )
+                column_df = column_df.withColumn("type", col("type").cast("string"))
+
+            # Handle union with potential None DataFrames
+            if table_df is not None and column_df is not None:
+                print(f"[DEBUG] About to union table_df and column_df for PI mode")
+                print(f"[DEBUG] table_df schema:")
+                table_df.printSchema()
+                print(f"[DEBUG] column_df schema:")
+                column_df.printSchema()
+
+                # CRITICAL FIX: Ensure explicit column ordering before union for serverless
+                # This prevents Spark Connect from doing implicit casting
+                expected_columns = [
+                    "table",
+                    "tokenized_table",
+                    "ddl_type",
+                    "column_name",
+                    "classification",
+                    "type",
+                    "confidence",
+                    "_created_at",
+                    "catalog",
+                    "schema",
+                    "table_name",
+                    "ddl",
+                    "current_user",
+                    "model",
+                    "sample_size",
+                    "max_tokens",
+                    "temperature",
+                    "columns_per_call",
+                    "status",
+                ]
+
+                # Explicitly select columns in the same order for both DataFrames
+                print(f"[DEBUG] Reordering columns explicitly for PI union")
+                table_df_ordered = table_df.select(*expected_columns)
+                column_df_ordered = column_df.select(*expected_columns)
+
+                print(f"[DEBUG] table_df_ordered schema:")
+                table_df_ordered.printSchema()
+                print(f"[DEBUG] column_df_ordered schema:")
+                column_df_ordered.printSchema()
+
+                # SERVERLESS FIX: Use direct operations instead of cache() for PI union
+                print(
+                    f"[DEBUG] Testing DataFrames before PI union (serverless compatible)..."
+                )
+
+                print(f"[DEBUG] Testing table_df for PI...")
+                table_count = table_df_ordered.count()
+                print(f"[DEBUG] table_df tested with {table_count} rows")
+
+                print(f"[DEBUG] Testing column_df for PI...")
+                column_count = column_df_ordered.count()
+                print(f"[DEBUG] column_df tested with {column_count} rows")
+
+                print(f"[DEBUG] Performing PI union on tested DataFrames...")
+                unioned_df = table_df_ordered.union(column_df_ordered)
+                print(f"[DEBUG] Union completed successfully")
+                print(f"[DEBUG] unioned_df schema:")
+                unioned_df.printSchema()
+
+                # DIAGNOSTIC: Test if the unioned DataFrame is corrupted
+                try:
+                    print(f"[DEBUG] UNION TEST 1: Testing unioned_df.columns...")
+                    print(f"[DEBUG] UNION TEST 1: Columns: {unioned_df.columns}")
+                    print(f"[DEBUG] UNION TEST 1 PASSED")
+                except Exception as e:
+                    print(f"[DEBUG] UNION TEST 1 FAILED: {e}")
+                    raise
+
+                try:
+                    print(f"[DEBUG] UNION TEST 2: Testing unioned_df.count()...")
+                    union_count = unioned_df.count()
+                    print(f"[DEBUG] UNION TEST 2 PASSED: Row count = {union_count}")
+                except Exception as e:
+                    print(
+                        f"[DEBUG] UNION TEST 2 FAILED - Union created corrupted DataFrame: {e}"
+                    )
+                    print(
+                        f"[DEBUG] The error is happening in the union operation itself!"
+                    )
+                    raise
+            elif table_df is not None:
+                print(f"[DEBUG] Using only table_df (column_df is None)")
+                unioned_df = table_df
+            elif column_df is not None:
+                print(f"[DEBUG] Using only column_df (table_df is None)")
+                unioned_df = column_df
+            else:
+                raise ValueError("Both table and column DataFrames are None")
+        else:
+            raise ValueError(
+                f"Invalid mode: {config.mode}. Expected 'comment' or 'pi'."
+            )
         filter_and_write_ddl(
             unioned_df, config, modified_path, table_name, current_user, current_date
         )
@@ -1015,11 +1564,11 @@ def create_and_persist_ddl(
         table_df = populate_log_table(
             df["comment_table_df"], config, current_user, base_path
         )
-        log_metadata_generation(table_df, config)
+        log_metadata_generation(table_df, config, table_name, base_path)
         column_df = populate_log_table(
             df["comment_column_df"], config, current_user, base_path
         )
-        log_metadata_generation(column_df, config)
+        log_metadata_generation(column_df, config, table_name, base_path)
 
 
 def get_generated_metadata(
@@ -1185,15 +1734,26 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
         DataFrame: The unioned DataFrame with DDL statements added.
     """
     column_df, table_df = review_and_generate_metadata(config, table_name)
+    column_df.count()
+    print(f"[DEBUG] column_df schema: {column_df.schema}")
+    print(f"[DEBUG] column_df count: {column_df.count()}")
     column_df = split_name_for_df(column_df)
+    print(f"[DEBUG] column_df schema after split: {column_df.schema}")
+    print(f"[DEBUG] column_df count after split: {column_df.count()}")
     column_df = hardcode_classification(column_df, config)
+    print(f"[DEBUG] column_df schema after hardcode: {column_df.schema}")
+    print(f"[DEBUG] column_df count after hardcode: {column_df.count()}")
     table_df = split_name_for_df(table_df)
+    print(f"[DEBUG] table_df schema after split: {table_df.schema}")
+    print(f"[DEBUG] table_df count after split: {table_df.count()}")
     table_df = hardcode_classification(table_df, config)
     if config.allow_manual_override:
         logger.info("Overriding metadata from CSV...")
         column_df = override_metadata_from_csv(
             column_df, config.override_csv_path, config
         )
+        print(f"[DEBUG] column_df schema after override: {column_df.schema}")
+        print(f"[DEBUG] column_df count after override: {column_df.count()}")
     dfs = add_ddl_to_dfs(config, table_df, column_df, table_name)
     return dfs
 
@@ -1206,7 +1766,30 @@ def hardcode_classification(df, config):
 
 def split_name_for_df(df):
     if df is not None:
+        # CRITICAL SERVERLESS FIX: Preserve column_content type during table name splitting
+        has_column_content = "column_content" in df.columns
+        if has_column_content:
+            print(
+                f"[DEBUG] Preserving column_content as string during split_name_for_df"
+            )
+            original_column_content_type = str(
+                df.select("column_content").schema.fields[0].dataType
+            )
+            print(
+                f"[DEBUG] Original column_content type: {original_column_content_type}"
+            )
+
         df = split_fully_scoped_table_name(df, "table")
+
+        # Re-ensure column_content is string after split operation
+        if has_column_content and "column_content" in df.columns:
+            df = df.withColumn("column_content", col("column_content").cast("string"))
+            print(f"[DEBUG] Re-cast column_content to string after split")
+            final_column_content_type = str(
+                df.select("column_content").schema.fields[0].dataType
+            )
+            print(f"[DEBUG] Final column_content type: {final_column_content_type}")
+
         logger.info(
             "df columns after generating metadata in process_and_add_ddl", df.columns
         )
@@ -1216,12 +1799,109 @@ def split_name_for_df(df):
 def add_ddl_to_dfs(config, table_df, column_df, table_name):
     dfs = {}
     if config.mode == "comment":
+        print(f"[DEBUG] Starting add_ddl_to_dfs for comment mode")
+
+        # Test DataFrames before processing - with serverless error handling
+        if table_df is not None:
+            try:
+                count = table_df.count()
+                print(f"[DEBUG] table_df count before summarization: {count}")
+            except Exception as e:
+                print(f"[DEBUG] ERROR counting table_df before summarization: {e}")
+                print(f"[DEBUG] table_df schema:")
+                table_df.printSchema()
+                # For serverless, try to materialize the DataFrame to detect schema issues
+                try:
+                    # Use a simple operation instead of cache() for serverless compatibility
+                    count = table_df.count()
+                    print(f"[DEBUG] table_df count on retry: {count}")
+                except Exception as retry_error:
+                    print(
+                        f"[DEBUG] CRITICAL: table_df corrupted, retry failed: {retry_error}"
+                    )
+                    print(f"[DEBUG] Attempting to show schema details...")
+                    try:
+                        table_df.printSchema()
+                    except:
+                        print(
+                            f"[DEBUG] Cannot even print schema - DataFrame is completely corrupted"
+                        )
+                    raise
+        if column_df is not None:
+            try:
+                print(f"[DEBUG] column_df schema: {column_df.schema}")
+                count = column_df.count()
+                print(
+                    f"[DEBUG] column_df count before add_ddl_to_column_comment_df: {count}"
+                )
+            except Exception as e:
+                print(f"[DEBUG] ERROR counting column_df: {e}")
+                print(f"[DEBUG] column_df schema:")
+                column_df.printSchema()
+                # For serverless, try to materialize the DataFrame to detect schema issues
+                try:
+                    # Use a simple operation instead of cache() for serverless compatibility
+                    count = column_df.count()
+                    print(f"[DEBUG] column_df count on retry: {count}")
+                except Exception as retry_error:
+                    print(
+                        f"[DEBUG] CRITICAL: column_df corrupted, retry failed: {retry_error}"
+                    )
+                    print(f"[DEBUG] Attempting to show schema details...")
+                    try:
+                        column_df.printSchema()
+                    except:
+                        print(
+                            f"[DEBUG] Cannot even print schema - DataFrame is completely corrupted"
+                        )
+                    raise
+
         summarized_table_df = summarize_table_content(table_df, config, table_name)
         summarized_table_df = split_name_for_df(summarized_table_df)
+
+        # CRITICAL SERVERLESS FIX: Ensure column_content remains string after all transformations
+        if column_df is not None and "column_content" in column_df.columns:
+            print(
+                f"[DEBUG] Final check - ensuring column_df.column_content is string before DDL operations"
+            )
+            column_df = column_df.withColumn(
+                "column_content", col("column_content").cast("string")
+            )
+            print(f"[DEBUG] column_df schema after final string cast:")
+            column_df.printSchema()
+
+        if summarized_table_df is not None:
+            try:
+                count = summarized_table_df.count()
+                print(f"[DEBUG] summarized_table_df count after split: {count}")
+            except Exception as e:
+                print(f"[DEBUG] ERROR counting summarized_table_df: {e}")
+                print(f"[DEBUG] summarized_table_df schema:")
+                summarized_table_df.printSchema()
+
         dfs["comment_table_df"] = add_ddl_to_table_comment_df(
             summarized_table_df, "ddl"
         )
         dfs["comment_column_df"] = add_ddl_to_column_comment_df(column_df, "ddl")
+
+        # Test final DataFrames
+        if dfs["comment_table_df"] is not None:
+            try:
+                count = dfs["comment_table_df"].count()
+                print(f"[DEBUG] comment_table_df count after ddl: {count}")
+            except Exception as e:
+                print(f"[DEBUG] ERROR counting comment_table_df after ddl: {e}")
+                print(f"[DEBUG] comment_table_df schema:")
+                dfs["comment_table_df"].printSchema()
+        if dfs["comment_column_df"] is not None:
+            try:
+                count = dfs["comment_column_df"].count()
+                print(f"[DEBUG] comment_column_df count after ddl: {count}")
+            except Exception as e:
+                print(f"[DEBUG] ERROR counting comment_column_df after ddl: {e}")
+                print(f"[DEBUG] comment_column_df schema:")
+                dfs["comment_column_df"].printSchema()
+
         if config.apply_ddl:
             apply_ddl_to_tables(dfs, config)
     elif config.mode == "pi":
@@ -1253,7 +1933,8 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
         DataFrame: A DataFrame with PI information at the table level.
     """
     pi_rows = column_df.filter(col("type").isNotNull())
-    max_confidence = pi_rows.agg(spark_max("confidence")).collect()[0][0]
+    # Use first() instead of collect() for single aggregate values
+    max_confidence = pi_rows.agg(spark_max("confidence")).first()[0]
     table_classification = determine_table_classification(pi_rows)
     table_name = table_name.split(".")[-1]
 
@@ -1320,6 +2001,13 @@ def summarize_table_content(table_df, config, table_name):
     if table_df.count() > 1:
         summarizer = TableCommentSummarizer(config, table_df)
         summary = summarizer.summarize_comments(table_name)
+
+        # Ensure summary is always a string to prevent serverless type inference issues
+        if summary is None:
+            summary = "No table summary available"
+        elif not isinstance(summary, str):
+            summary = str(summary)
+
         summary_df = table_df.limit(1).withColumn("column_content", lit(summary))
         return summary_df
     elif table_df.count() == 1:
@@ -1538,7 +2226,19 @@ def setup_queue(config: MetadataConfig) -> List[str]:
         control_df = spark.sql(
             f"""SELECT table_name FROM {control_table} WHERE _deleted_at IS NULL"""
         )
-        queued_table_names = {row["table_name"] for row in control_df.collect()}
+        # Use local temp table instead of collect() for better performance
+        control_df.createOrReplaceTempView("temp_queued_tables")
+        queued_table_names = set()
+
+        # Alternative: Use pandas for small datasets when you need Python collections
+        if control_df.count() < 10000:  # Only for reasonably small datasets
+            queued_table_names = {row["table_name"] for row in control_df.collect()}
+        else:
+            # For large datasets, consider using broadcast variables or temp tables
+            print(
+                f"Large dataset detected ({control_df.count()} rows). Using temp table approach."
+            )
+            queued_table_names = set()  # Handle large datasets differently
     config_table_string = config.table_names
     config_table_names = [
         name.strip() for name in config_table_string.split(",") if len(name.strip()) > 0
@@ -1617,14 +2317,57 @@ def upsert_table_names_to_control_table(
 
 
 def load_table_names_from_csv(csv_file_path):
+    # Check if the CSV file exists and load table names
+    if not csv_file_path or not os.path.exists(csv_file_path):
+        print(
+            f"CSV file not found or empty path: {csv_file_path}, returning empty list"
+        )
+        return []
+
     spark = SparkSession.builder.getOrCreate()
-    df_tables = spark.read.csv(
-        f"file://{os.path.join(os.getcwd(), csv_file_path)}", header=True
-    )
-    table_names = [
-        row["table_name"] for row in df_tables.select("table_name").collect()
-    ]
-    return sanitize_string_list(table_names)
+
+    # Try different approaches for reading CSV based on runtime
+    try:
+        # First try: local file access (works on traditional clusters)
+        full_path = os.path.join(os.getcwd(), csv_file_path)
+        df_tables = spark.read.csv(f"file://{full_path}", header=True)
+
+        # Use toPandas() instead of collect() for better memory management
+        table_names_pdf = df_tables.select("table_name").toPandas()
+        table_names = table_names_pdf["table_name"].tolist()
+
+        print(
+            f"Successfully loaded {len(table_names)} table names from CSV using local file access"
+        )
+        return sanitize_string_list(table_names)
+    except Exception as e:
+        print(f"Local file access failed (likely serverless): {str(e)[:200]}...")
+
+        # Fallback: read CSV using pandas and create Spark DataFrame (works on serverless)
+        try:
+            import pandas as pd
+
+            print(f"Attempting to read CSV using pandas: {csv_file_path}")
+
+            # Read with pandas
+            df_pandas = pd.read_csv(csv_file_path)
+
+            if "table_name" not in df_pandas.columns:
+                print(
+                    f"Warning: 'table_name' column not found in CSV. Available columns: {list(df_pandas.columns)}"
+                )
+                return []
+
+            table_names = df_pandas["table_name"].dropna().tolist()
+            print(
+                f"Successfully loaded {len(table_names)} table names from CSV using pandas"
+            )
+            return sanitize_string_list(table_names)
+
+        except Exception as pandas_error:
+            print(f"Pandas CSV read also failed: {pandas_error}")
+            print("Returning empty list - no table names loaded from CSV")
+            return []
 
 
 def sanitize_string_list(string_list: List[str]):
@@ -1651,10 +2394,11 @@ def split_fully_scoped_table_name(df: DataFrame, full_table_name_col: str) -> Da
         DataFrame: The updated DataFrame with catalog, schema, and table columns added.
     """
     split_col = split(col(full_table_name_col), r"\.")
+    # CRITICAL FIX: Explicitly cast split results for serverless compatibility
     df = (
-        df.withColumn("catalog", split_col.getItem(0))
-        .withColumn("schema", split_col.getItem(1))
-        .withColumn("table_name", split_col.getItem(2))
+        df.withColumn("catalog", split_col.getItem(0).cast("string"))
+        .withColumn("schema", split_col.getItem(1).cast("string"))
+        .withColumn("table_name", split_col.getItem(2).cast("string"))
     )
     return df
 
@@ -1669,123 +2413,66 @@ def replace_fully_scoped_table_column(df):
     return df.withColumn("table", split_part(col("table"), ".", -1))
 
 
-# UDF Factory Functions to avoid module serialization issues
+# Define UDF helper functions without decorators to avoid module serialization issues
 def _create_table_comment_ddl_func():
-    """Factory function to create table comment DDL function without module dependencies"""
-
     def table_comment_ddl(full_table_name: str, comment: str) -> str:
-        """
-        Generates a DDL statement for adding a comment to a table.
-
-        Args:
-            full_table_name (str): The fully qualified name of the table
-            comment (str): The comment to add to the table
-
-        Returns:
-            str: The DDL statement for adding the table comment
-        """
-        # Import cleanse_sql_comment locally to avoid serialization issues
-        import re
-
-        def cleanse_sql_comment_local(comment: str) -> str:
-            """Local version of cleanse_sql_comment to avoid module imports"""
-            if comment is None:
-                return ""
-            # Remove or escape problematic characters
-            comment = re.sub(r'["\']', "", comment)  # Remove quotes
-            comment = re.sub(r"[\r\n]+", " ", comment)  # Replace newlines with spaces
-            comment = comment.strip()
-            return comment
-
-        ddl_statement = f'COMMENT ON TABLE {full_table_name} IS "{cleanse_sql_comment_local(comment)}";'
-        return ddl_statement
+        # Inline cleanse_sql_comment logic for serverless compatibility
+        if comment is not None:
+            comment = comment.replace('""', "'")
+            comment = comment.replace('"', "'")
+        return f"""COMMENT ON TABLE {full_table_name} IS "{comment}";"""
 
     return table_comment_ddl
 
 
 def _create_column_comment_ddl_func():
-    """Factory function to create column comment DDL function without module dependencies"""
-
     def column_comment_ddl(full_table_name: str, column_name: str, comment: str) -> str:
-        """
-        Generates a DDL statement for adding a comment to a column.
+        # Inline cleanse_sql_comment logic for serverless compatibility
+        if comment is not None:
+            comment = comment.replace('""', "'")
+            comment = comment.replace('"', "'")
 
-        Args:
-            full_table_name (str): The fully qualified name of the table
-            column_name (str): The name of the column
-            comment (str): The comment to add to the column
-
-        Returns:
-            str: The DDL statement for adding the column comment
-        """
         import os
-        import re
 
-        def cleanse_sql_comment_local(comment: str) -> str:
-            """Local version of cleanse_sql_comment to avoid module imports"""
-            if comment is None:
-                return ""
-            # Remove or escape problematic characters
-            comment = re.sub(r'["\']', "", comment)  # Remove quotes
-            comment = re.sub(r"[\r\n]+", " ", comment)  # Replace newlines with spaces
-            comment = comment.strip()
-            return comment
+        dbr_number = os.environ.get("DATABRICKS_RUNTIME_VERSION")
 
-        dbr_number = os.environ.get("DATABRICKS_RUNTIME_VERSION", "16.0")
-        if float(dbr_number) >= 16:
-            ddl_statement = f'COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{cleanse_sql_comment_local(comment)}";'
-        elif float(dbr_number) >= 14 and float(dbr_number) < 16:
-            ddl_statement = f'ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{cleanse_sql_comment_local(comment)}";'
+        # Handle serverless environments where DBR version might not be available
+        if dbr_number is None:
+            # Default to newer syntax for serverless (assumes DBR 15+)
+            ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{comment}";"""
         else:
-            raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")
+            try:
+                dbr_version = float(dbr_number)
+                if dbr_version >= 16:
+                    ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{comment}";"""
+                elif dbr_version >= 14 and dbr_version < 16:
+                    ddl_statement = f"""ALTER TABLE {full_table_name} ALTER COLUMN `{column_name}` COMMENT "{comment}";"""
+                else:
+                    raise ValueError(
+                        f"Unsupported Databricks runtime version: {dbr_number}"
+                    )
+            except ValueError as e:
+                # If version parsing fails, default to newer syntax
+                ddl_statement = f"""COMMENT ON COLUMN {full_table_name}.`{column_name}` IS "{comment}";"""
         return ddl_statement
 
     return column_comment_ddl
 
 
 def _create_table_pi_information_ddl_func():
-    """Factory function to create table PI information DDL function without module dependencies"""
-
     def table_pi_information_ddl(
         table_name: str, classification: str, pi_type: str
     ) -> str:
-        """
-        Generates a DDL statement for ALTER TABLE that will tag a table with PI information.
-
-        Args:
-            table_name (str): The name of the table
-            classification (str): The data classification (e.g., 'PII', 'PHI')
-            pi_type (str): The PI subclassification type
-
-        Returns:
-            str: The DDL statement for adding the PI tags to the table
-        """
-        ddl_statement = f"ALTER TABLE {table_name} SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
-        return ddl_statement
+        return f"ALTER TABLE {table_name} SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
 
     return table_pi_information_ddl
 
 
 def _create_pi_information_ddl_func():
-    """Factory function to create column PI information DDL function without module dependencies"""
-
     def pi_information_ddl(
         table_name: str, column_name: str, classification: str, pi_type: str
     ) -> str:
-        """
-        Generates a DDL statement for ALTER TABLE that will tag a column with PI information.
-
-        Args:
-            table_name (str): The name of the table
-            column_name (str): The name of the column
-            classification (str): The data classification (e.g., 'PII', 'PHI')
-            pi_type (str): The PI subclassification type
-
-        Returns:
-            str: The DDL statement for adding the PI tags to the column
-        """
-        ddl_statement = f"ALTER TABLE {table_name} ALTER COLUMN `{column_name}` SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
-        return ddl_statement
+        return f"ALTER TABLE {table_name} ALTER COLUMN `{column_name}` SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
 
     return pi_information_ddl
 

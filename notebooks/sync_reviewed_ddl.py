@@ -32,7 +32,7 @@ mode = dbutils.widgets.get("mode")
 review_variables = {
     "reviewed_file_name": file_name,
     "current_user": current_user,
-    "mode": mode
+    "mode": mode,
 }
 
 # COMMAND ----------
@@ -41,8 +41,13 @@ review_variables = {
 def main(kwargs, input_file):
     spark_version = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
     config = MetadataConfig(**kwargs)
-    if 'ml' not in spark_version and 'excel' in (config.review_input_file_type, config.reviewable_output_format):
-        raise ValueError("Excel writes in dbxmetagen are not supported on standard runtimes. Please change your output file type to tsv or sql if appropriate.")
+    if "ml" not in spark_version and "excel" in (
+        config.review_input_file_type,
+        config.reviewable_output_format,
+    ):
+        raise ValueError(
+            "Excel writes in dbxmetagen are not supported on standard runtimes. Please change your output file type to tsv or sql if appropriate."
+        )
     process_metadata_file(config, input_file)
 
 
@@ -51,5 +56,3 @@ def main(kwargs, input_file):
 main(review_variables, file_name)
 
 # COMMAND ----------
-
-

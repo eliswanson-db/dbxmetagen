@@ -4,6 +4,14 @@ from datetime import datetime
 
 
 class MetadataConfig:
+    # Dynamic attributes loaded from YAML - defined for type checking
+    disable_medical_information_value: str
+    mode: str
+    allow_data: bool
+    yaml_file_path: str
+    yaml_variable_names: list
+    host: str
+    env: str
     ACRO_CONTENT = {}
     SETUP_PARAMS = {
         "yaml_file_path": "../variables.yml",
