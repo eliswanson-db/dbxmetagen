@@ -1,46 +1,52 @@
-import pandas as pd
-from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, concat_ws, collect_list, lit, when, count, col, pandas_udf, PandasUDFType
-import os
+from pyspark.sql.functions import concat_ws, collect_list
 import json
 from typing import Dict, Any
-from openai import OpenAI
-from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletion
 from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.metadata_generator import PIResponse, MetadataGeneratorFactory
 from src.dbxmetagen.error_handling import exponential_backoff
+from src.dbxmetagen.chat_client import ChatClientFactory
 
 
 class TableCommentSummarizer:
     def __init__(self, config, df):
         self.config = config
         self.df = df
+        self.chat_client = ChatClientFactory.create_client(config)
 
+    @staticmethod
     def _parse_table_comment_input(df):
-        return df.toPandas().to_dict(orient='records')
+        return df.toPandas().to_dict(orient="records")
 
-    def _get_chat_completion(self, config: MetadataConfig, prompt_content: str, model: str, max_tokens: int, temperature: float, retries: int = 0, max_retries: int = 3) -> ChatCompletion:
-        base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints"
-        # TODO: Replace the open AI chat completion with a langchain structured output
-        # self.chat_response = ChatDatabricks(
-        #     endpoint=self.config.model,
-        #     temperature=self.config.temperature,
-        #     max_tokens=self.config.max_tokens
-        # ).with_structured_output(CommentResponse).invoke(prompt_content)
-        # return self.chat_response
-        client = OpenAI(api_key=os.environ['DATABRICKS_TOKEN'], base_url=base_url)
+    def _get_chat_completion(
+        self,
+        config: MetadataConfig,
+        prompt_content: str,
+        model: str,
+        max_tokens: int,
+        temperature: float,
+        retries: int = 0,
+        max_retries: int = 3,
+    ) -> ChatCompletion:
         try:
-            return client.chat.completions.create(
+            return self.chat_client.create_completion(
                 messages=prompt_content,
                 model=model,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
             )
         except Exception as e:
             if retries < max_retries:
                 print(f"Error: {e}. Retrying in {2 ** retries} seconds...")
                 exponential_backoff(retries)
-                return self._get_chat_completion(config, prompt_content, model, max_tokens, temperature, retries + 1, max_retries)
+                return self._get_chat_completion(
+                    config,
+                    prompt_content,
+                    model,
+                    max_tokens,
+                    temperature,
+                    retries + 1,
+                    max_retries,
+                )
             else:
                 print(f"Failed after {max_retries} retries.")
                 raise e
@@ -55,8 +61,10 @@ class TableCommentSummarizer:
             raise ValueError(f"JSON decode error: {e}")
 
     def summarize_comments(self, table_name: str) -> str:
-        table_df = self.df.filter(self.df['table'] == table_name)
-        comments = table_df.select(concat_ws(" ", collect_list("column_content")).alias("all_comments")).collect()[0]["all_comments"]
+        table_df = self.df.filter(self.df["table"] == table_name)
+        comments = table_df.select(
+            concat_ws(" ", collect_list("column_content")).alias("all_comments")
+        ).collect()[0]["all_comments"]
         prompt_content = [
             {
                 "role": "system",
@@ -77,21 +85,24 @@ class TableCommentSummarizer:
                 10. Be concise unless verbosity is truly warranted.
                 11. Do not add headers or other markdown.
                 12. I will provide you with a few-shot learning example below. Pattern your approach off this example, but do not use information from it directly unless the user input is nearly exactly the same.
-                """
+                """,
             },
             {
                 "role": "user",
-                "content": """This table contains calculated values related to clinical trials, including facility counts and subject counts for adverse events. Based on the NCT IDs, this appears to be derived from ClinicalTrials.gov data, tracking the number of facilities and subjects involved in clinical trials. The table includes metrics on both non-serious adverse events (NSAE) and serious adverse events (SAE) subjects, providing insights into trial safety profiles. This table contains calculated values related to clinical trial registrations and reporting timelines. It tracks when trials were registered, their duration, whether results were reported, and the time taken to report results. The data appears to be from a clinical trials database, possibly tracking compliance with reporting requirements. This table contains calculated values related to facilities and age requirements, likely for clinical trials or healthcare services. The data includes boolean flags for facility locations and counts, as well as minimum and maximum age specifications with their corresponding units. Based on the high number of null values across columns, this appears to be a sparse dataset where not all records have complete information. Table containing calculated values related to clinical trial measurements and outcomes. This appears to be a dataset tracking different types of outcomes to measure in clinical trials along with age units. The table is part of the dbxmetagen.test_data schema, suggesting it may be test data for Databricks metadata generation. Based on the column metadata, this table contains a significant number of null values across all columns."""
+                "content": """This table contains calculated values related to clinical trials, including facility counts and subject counts for adverse events. Based on the NCT IDs, this appears to be derived from ClinicalTrials.gov data, tracking the number of facilities and subjects involved in clinical trials. The table includes metrics on both non-serious adverse events (NSAE) and serious adverse events (SAE) subjects, providing insights into trial safety profiles. This table contains calculated values related to clinical trial registrations and reporting timelines. It tracks when trials were registered, their duration, whether results were reported, and the time taken to report results. The data appears to be from a clinical trials database, possibly tracking compliance with reporting requirements. This table contains calculated values related to facilities and age requirements, likely for clinical trials or healthcare services. The data includes boolean flags for facility locations and counts, as well as minimum and maximum age specifications with their corresponding units. Based on the high number of null values across columns, this appears to be a sparse dataset where not all records have complete information. Table containing calculated values related to clinical trial measurements and outcomes. This appears to be a dataset tracking different types of outcomes to measure in clinical trials along with age units. The table is part of the dbxmetagen.test_data schema, suggesting it may be test data for Databricks metadata generation. Based on the column metadata, this table contains a significant number of null values across all columns.""",
             },
             {
                 "role": "user",
-                "content": """This table in the dbxmetagen.test_data schema contains calculated metrics related to clinical trials, likely derived from ClinicalTrials.gov data. It tracks various aspects of clinical trials including facility information (counts and location flags), subject enrollment data, adverse event reporting (both serious adverse events (SAE) and non-serious adverse events (NSAE)), registration timelines, and reporting compliance metrics. The table includes age requirement specifications with corresponding units (minimum and maximum age values), as well as outcome measurement data. The presence of NCT IDs, the ClinicalTrials.gov identifier, suggests these are standardized clinical trial identifiers. The table is relatively sparse, with a significant number of null values across multiple columns, indicating that not all metrics are available for every trial. This comprehensive dataset serves analytical purposes for monitoring clinical trial safety profiles, regulatory compliance regarding result reporting timeframes, geographical distribution of trial facilities, and demographic inclusion criteria across different studies."""
+                "content": """This table in the dbxmetagen.test_data schema contains calculated metrics related to clinical trials, likely derived from ClinicalTrials.gov data. It tracks various aspects of clinical trials including facility information (counts and location flags), subject enrollment data, adverse event reporting (both serious adverse events (SAE) and non-serious adverse events (NSAE)), registration timelines, and reporting compliance metrics. The table includes age requirement specifications with corresponding units (minimum and maximum age values), as well as outcome measurement data. The presence of NCT IDs, the ClinicalTrials.gov identifier, suggests these are standardized clinical trial identifiers. The table is relatively sparse, with a significant number of null values across multiple columns, indicating that not all metrics are available for every trial. This comprehensive dataset serves analytical purposes for monitoring clinical trial safety profiles, regulatory compliance regarding result reporting timeframes, geographical distribution of trial facilities, and demographic inclusion criteria across different studies.""",
             },
-            {
-                "role": "user",
-                "content": f"{comments}"
-            }
+            {"role": "user", "content": f"{comments}"},
         ]
-        chat_completion = self._get_chat_completion(self.config, prompt_content, model=self.config.model, max_tokens=5000, temperature=0.3)
+        chat_completion = self._get_chat_completion(
+            self.config,
+            prompt_content,
+            model=self.config.model,
+            max_tokens=5000,
+            temperature=0.3,
+        )
         response_content = chat_completion.choices[0].message.content
         return response_content

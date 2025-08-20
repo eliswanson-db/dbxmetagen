@@ -38,6 +38,34 @@ variables:
   model:
     description: LLM endpoint used by model calls. Note that this is not the same as any registered model in UC that wraps the prompt engineering work, but is the serving endpoint called after prompt engineering. This can be changed to other served models as well as provisioned throughput models or external models for compliance purposes if needed. Recommend databricks-claude-3-7-sonnet for best comments, with databricks-meta-llama-3-3-70b-instruct as a backup. Sonnet will generally give more complex responses. Review security, tenancy, and cost considerations before making a decision. 
     default: databricks-claude-3-7-sonnet
+  chat_completion_type:
+    description: |
+      Type of chat completion endpoint to use:
+      - 'databricks' (default): Use Databricks foundation models (e.g., databricks-claude-3-7-sonnet). Uses DATABRICKS_TOKEN and DATABRICKS_HOST environment variables.
+      - 'openai_spec': Use any OpenAI-compatible API endpoint that accepts standard 'model' parameter (e.g., OpenAI, Azure OpenAI with standard format, Anthropic, etc.). Requires custom_endpoint_url and secret configuration.
+      - 'custom_chat_spec': Use APIs that are OpenAI-compatible but use 'engine' instead of 'model' parameter (e.g., some Azure OpenAI deployments). Requires custom_endpoint_url and secret configuration.
+    default: databricks
+  custom_endpoint_url:
+    description: |
+      Base URL for custom chat completion endpoints. Only used when chat_completion_type is 'openai_spec' or 'custom_chat_spec'.
+      Should be the base URL without the /chat/completions suffix.
+      Examples:
+      - OpenAI: https://api.openai.com/v1
+      - Azure OpenAI: https://your-resource.openai.azure.com
+      - Anthropic: https://api.anthropic.com
+    default: null
+  custom_endpoint_secret_scope:
+    description: |
+      Databricks secret scope containing the API key/token for custom endpoints. Only used when chat_completion_type is 'openai_spec' or 'custom_chat_spec'.
+      The secret should contain the Bearer token or API key for authentication.
+      Example: Create a secret scope called 'openai-secrets' and store your API key there.
+    default: null
+  custom_endpoint_secret_key:
+    description: |
+      Key name within the secret scope for the API token. Only used when chat_completion_type is 'openai_spec' or 'custom_chat_spec'.
+      This is the key name you used when storing the secret in the scope.
+      Common names: 'api_key', 'token', 'openai_key', etc.
+    default: api_key
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test

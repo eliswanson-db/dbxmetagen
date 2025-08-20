@@ -33,23 +33,23 @@
 # COMMAND ----------
 
 import sys
-sys.path.append('../')
+
+sys.path.append("../")
 
 # COMMAND ----------
 
 import os
 import json
-from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
-from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
-from src.dbxmetagen.processing import split_table_names, sanitize_email
-from src.dbxmetagen.error_handling import exponential_backoff
+from src.dbxmetagen.databricks_utils import (
+    setup_databricks_environment,
+    get_job_context,
+)
 from src.dbxmetagen.main import main
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Set up widgets
+# MAGIC # Set up widgets and environment
 
 # COMMAND ----------
 
@@ -60,24 +60,26 @@ dbutils.widgets.text("table_names", "")
 
 # COMMAND ----------
 
+# Get widget values and set up environment
 table_names = dbutils.widgets.get("table_names")
 mode = dbutils.widgets.get("mode")
 env = dbutils.widgets.get("env")
 cleanup_control_table = dbutils.widgets.get("cleanup_control_table")
-context_json = dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson()
-context = json.loads(context_json)
-job_id = context.get("tags", {}).get("jobId", None)
-current_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+
+# Set up Databricks environment variables and get current user
+current_user = setup_databricks_environment(dbutils)
+
+# Get job context if running in a job
+job_id = get_job_context(dbutils)
+
 notebook_variables = {
     "table_names": table_names,
     "mode": mode,
     "env": env,
     "current_user": current_user,
     "cleanup_control_table": cleanup_control_table,
-    "job_id": job_id
+    "job_id": job_id,
 }
-api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-os.environ["DATABRICKS_TOKEN"]=api_key
 
 # COMMAND ----------
 
