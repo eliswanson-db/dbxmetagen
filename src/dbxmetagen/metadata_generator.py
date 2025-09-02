@@ -47,18 +47,6 @@ class CommentResponse(Response):
 class SummaryCommentResponse(Response):
     pass
 
-<<<<<<< HEAD
-=======
-
-class MetadataGenerator(ABC):
-    @property
-    def openai_client(self):
-        return OpenAI(
-            api_key=os.environ["DATABRICKS_TOKEN"],
-            base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints",
-        )
->>>>>>> indsol
-
 class MetadataGenerator(ABC):
     def from_context(self, config):
         self.config = config
@@ -88,23 +76,12 @@ class CommentGenerator(MetadataGenerator):
         return comment_response, message_payload
 
     def predict_chat_response(self, prompt_content):
-<<<<<<< HEAD
         self.chat_response = self.chat_client.create_structured_completion(
             messages=prompt_content,
             response_model=CommentResponse,
             model=self.config.model,
             max_tokens=self.config.max_tokens,
             temperature=self.config.temperature,
-=======
-        self.chat_response = (
-            ChatDatabricks(
-                endpoint=self.config.model,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-            )
-            .with_structured_output(CommentResponse)
-            .invoke(prompt_content)
->>>>>>> indsol
         )
         return self.chat_response
 
@@ -222,23 +199,12 @@ class PIIdentifier(MetadataGenerator):
 
     def predict_chat_response(self, prompt_content):
         try:
-<<<<<<< HEAD
             self.chat_response = self.chat_client.create_structured_completion(
                 messages=prompt_content,
                 response_model=PIResponse,
                 model=self.config.model,
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
-=======
-            self.chat_response = (
-                ChatDatabricks(
-                    endpoint=self.config.model,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
-                .with_structured_output(PIResponse)
-                .invoke(prompt_content)
->>>>>>> indsol
             )
         except:
             print("Validation error - response \n\n\n response")

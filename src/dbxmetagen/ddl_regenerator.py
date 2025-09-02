@@ -9,12 +9,13 @@ from shutil import copyfile
 from pyspark.sql import SparkSession
 
 from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.processing import split_table_names, sanitize_email
+from src.dbxmetagen.processing import split_table_names
+from src.dbxmetagen.user_utils import sanitize_user_identifier
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
+
 
 def ensure_directory_exists(path: str) -> None:
     """
@@ -31,6 +32,7 @@ def ensure_directory_exists(path: str) -> None:
             logging.error(f"Failed to create directory {path}: {e}")
             raise
 
+
 def get_output_file_name(input_file: str, suffix: str) -> str:
     """
     Generate an output file name based on the input file's base name and a suffix.
@@ -44,6 +46,7 @@ def get_output_file_name(input_file: str, suffix: str) -> str:
     """
     base = os.path.splitext(os.path.basename(input_file))[0]
     return f"{base}_reviewed{suffix}"
+
 
 def load_metadata_file(file_path: str, file_type: str) -> pd.DataFrame:
     """
@@ -61,10 +64,10 @@ def load_metadata_file(file_path: str, file_type: str) -> pd.DataFrame:
         raise FileNotFoundError(f"Input file does not exist: {file_path}")
 
     try:
-        if file_type == 'tsv':
-            df = pd.read_csv(file_path, sep='\t', dtype=str)
-        elif file_type == 'excel':
-            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+        if file_type == "tsv":
+            df = pd.read_csv(file_path, sep="\t", dtype=str)
+        elif file_type == "excel":
+            df = pd.read_excel(file_path, dtype=str, engine="openpyxl")
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
         logging.info(f"Loaded file: {file_path}")
@@ -73,6 +76,7 @@ def load_metadata_file(file_path: str, file_type: str) -> pd.DataFrame:
         logging.error(f"Failed to load file {file_path}: {e}")
         raise
 
+
 def get_comment_from_ddl(ddl: str) -> str:
     """
     Extract comment from DDL.
@@ -80,9 +84,10 @@ def get_comment_from_ddl(ddl: str) -> str:
     ddl = re.sub(
         r'(COMMENT ON TABLE [^"\']+ IS\s+)(["\'])(.*?)(["\'])',
         lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-        new_comment
+        new_comment,
     )
     return cleanse_sql_comment(new_comment)
+
 
 def get_pii_tags_from_ddl(ddl: str, classification: str, subclassification: str) -> str:
     """
@@ -92,15 +97,16 @@ def get_pii_tags_from_ddl(ddl: str, classification: str, subclassification: str)
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
             lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
-            ddl
+            ddl,
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
             lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
-            ddl
+            ddl,
         )
     return classification, subclassification
+
 
 def replace_comment_in_ddl(ddl: str, new_comment: str) -> str:
     """
@@ -110,27 +116,30 @@ def replace_comment_in_ddl(ddl: str, new_comment: str) -> str:
         ddl = re.sub(
             r'(COMMENT ON TABLE [^"\']+ IS\s+)(["\'])(.*?)(["\'])',
             lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-            ddl
+            ddl,
         )
     else:
-        dbr_number = os.environ.get('DATABRICKS_RUNTIME_VERSION')
+        dbr_number = os.environ.get("DATABRICKS_RUNTIME_VERSION")
         if float(dbr_number) >= 16:
             ddl = re.sub(
                 r'(ALTER TABLE [^"\']+ COMMENT ON COLUMN [^ ]+ IS\s+)(["\'])(.*?)(["\'])',
                 lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-                ddl
+                ddl,
             )
-        elif float(dbr_number) >=14 and float(dbr_number) < 16:
+        elif float(dbr_number) >= 14 and float(dbr_number) < 16:
             ddl = re.sub(
                 r'(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ COMMENT\s+)(["\'])(.*?)(["\'])',
                 lambda m: f"{m.group(1)}{m.group(2)}{new_comment}{m.group(4)}",
-                ddl
+                ddl,
             )
-        else: 
-            raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")            
+        else:
+            raise ValueError(f"Unsupported Databricks runtime version: {dbr_number}")
     return ddl
 
-def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: str) -> str:
+
+def replace_pii_tags_in_ddl(
+    ddl: str, classification: str, subclassification: str
+) -> str:
     """
     Replace the PII tagging strings in a DDL statement with new classification and subclassification.
     """
@@ -138,56 +147,68 @@ def replace_pii_tags_in_ddl(ddl: str, classification: str, subclassification: st
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
             lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
-            ddl
+            ddl,
         )
     else:
         ddl = re.sub(
             r"(ALTER TABLE [^ ]+ ALTER COLUMN [^ ]+ SET TAGS \('data_classification' = ')[^']+(', 'data_subclassification' = ')[^']+('\);)",
             lambda m: f"{m.group(1)}{classification}{m.group(2)}{subclassification}{m.group(3)}",
-            ddl
+            ddl,
         )
     return ddl
 
-def update_ddl_row(mode: str, reviewed_column: str, row: pd.Series) -> Union[str, Tuple[str]]:
+
+def update_ddl_row(
+    mode: str, reviewed_column: str, row: pd.Series
+) -> Union[str, Tuple[str]]:
     """
     Update a single row's DDL based on classification/type or column_content.
     """
-    if mode == 'pi':
-        if reviewed_column == 'ddl':
-            new_classification, new_type = get_pii_tags_from_ddl(row['ddl'], row['classification'], row['type'])
-            return new_classification, new_type, row['ddl']
-        elif reviewed_column in ('classification', 'type', 'other', 'column_content'):
-            new_ddl = replace_pii_tags_in_ddl(row['ddl'], row['classification'], row['type'])
-            return row['classification'], row['type'], new_ddl
+    if mode == "pi":
+        if reviewed_column == "ddl":
+            new_classification, new_type = get_pii_tags_from_ddl(
+                row["ddl"], row["classification"], row["type"]
+            )
+            return new_classification, new_type, row["ddl"]
+        elif reviewed_column in ("classification", "type", "other", "column_content"):
+            new_ddl = replace_pii_tags_in_ddl(
+                row["ddl"], row["classification"], row["type"]
+            )
+            return row["classification"], row["type"], new_ddl
         else:
-            raise ValueError(f"Unknown reviewed column for 'pi' mode: {reviewed_column}")
-    elif mode == 'comment':
-        if reviewed_column == 'ddl':
-            new_comment = get_comment_from_ddl(row['ddl'])
-            return new_comment, row['ddl']
-        elif reviewed_column in ('classification', 'type', 'other', 'column_content'):
-            new_ddl = replace_comment_in_ddl(row['ddl'], row['column_content'])
-            return row['column_content'], new_ddl
+            raise ValueError(
+                f"Unknown reviewed column for 'pi' mode: {reviewed_column}"
+            )
+    elif mode == "comment":
+        if reviewed_column == "ddl":
+            new_comment = get_comment_from_ddl(row["ddl"])
+            return new_comment, row["ddl"]
+        elif reviewed_column in ("classification", "type", "other", "column_content"):
+            new_ddl = replace_comment_in_ddl(row["ddl"], row["column_content"])
+            return row["column_content"], new_ddl
         else:
-            raise ValueError(f"Unknown reviewed column for 'comment' mode: {reviewed_column}")
+            raise ValueError(
+                f"Unknown reviewed column for 'comment' mode: {reviewed_column}"
+            )
     else:
         raise ValueError("Unknown mode")
 
 
 def check_file_type(file_name: str, config: MetadataConfig) -> None:
-    if file_name.endswith('.xlsx') and config.review_input_file_type != 'excel':
-        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
-    elif file_name.endswith('.tsv') and config.review_input_file_type != 'tsv':
-        raise ValueError(f"File {file_name} does not match the specified export format {config.review_input_file_type}.")
+    if file_name.endswith(".xlsx") and config.review_input_file_type != "excel":
+        raise ValueError(
+            f"File {file_name} does not match the specified export format {config.review_input_file_type}."
+        )
+    elif file_name.endswith(".tsv") and config.review_input_file_type != "tsv":
+        raise ValueError(
+            f"File {file_name} does not match the specified export format {config.review_input_file_type}."
+        )
     else:
         return True
-    
+
 
 def export_metadata(
-    df: pd.DataFrame,
-    output_dir: str,
-    input_file: str,
-    export_format: str
+    df: pd.DataFrame, output_dir: str, input_file: str, export_format: str
 ) -> str:
     """
     Export the DataFrame to the specified format.
@@ -202,29 +223,31 @@ def export_metadata(
         str: Path to the exported file.
     """
     ensure_directory_exists(output_dir)
-    if export_format == 'sql':
-        output_file = os.path.join(output_dir, get_output_file_name(input_file, '.sql'))
+    if export_format == "sql":
+        output_file = os.path.join(output_dir, get_output_file_name(input_file, ".sql"))
         try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                for ddl in df['ddl'].dropna():
+            with open(output_file, "w", encoding="utf-8") as f:
+                for ddl in df["ddl"].dropna():
                     f.write(ddl.strip())
-                    if not ddl.strip().endswith(';'):
-                        f.write(';')
-                    f.write('\n')
+                    if not ddl.strip().endswith(";"):
+                        f.write(";")
+                    f.write("\n")
             logging.info(f"Exported SQL file: {output_file}")
         except Exception as e:
             logging.error(f"Failed to write SQL file: {e}")
             raise
-    elif export_format == 'tsv':
-        output_file = os.path.join(output_dir, get_output_file_name(input_file, '.tsv'))
+    elif export_format == "tsv":
+        output_file = os.path.join(output_dir, get_output_file_name(input_file, ".tsv"))
         try:
-            df.to_csv(output_file, sep='\t', index=False)
+            df.to_csv(output_file, sep="\t", index=False)
             logging.info(f"Exported TSV file: {output_file}")
         except Exception as e:
             logging.error(f"Failed to write TSV file: {e}")
             raise
-    elif export_format == 'excel':
-        output_file = os.path.join(output_dir, get_output_file_name(input_file, '.xlsx'))
+    elif export_format == "excel":
+        output_file = os.path.join(
+            output_dir, get_output_file_name(input_file, ".xlsx")
+        )
         try:
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             local_path = "/local_disk0/tmp/{input_file}.xlsx"
@@ -246,17 +269,17 @@ def extract_ddls_from_file(file_path: str, file_type: str) -> list:
     - For .xlsx/.tsv: looks for 'ddl' column, or uses the first column.
     """
     ddls = []
-    if file_type == 'sql':
-        with open(file_path, 'r', encoding='utf-8') as f:
+    if file_type == "sql":
+        with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
-            ddls = [ddl.strip() for ddl in content.split(';') if ddl.strip()]
-    elif file_type in ('excel', 'tsv'):
-        if file_type == 'excel':
-            df = pd.read_excel(file_path, dtype=str, engine='openpyxl')
+            ddls = [ddl.strip() for ddl in content.split(";") if ddl.strip()]
+    elif file_type in ("excel", "tsv"):
+        if file_type == "excel":
+            df = pd.read_excel(file_path, dtype=str, engine="openpyxl")
         else:
-            df = pd.read_csv(file_path, sep='\t', dtype=str)
-        if 'ddl' in df.columns:
-            ddl_series = df['ddl']
+            df = pd.read_csv(file_path, sep="\t", dtype=str)
+        if "ddl" in df.columns:
+            ddl_series = df["ddl"]
         else:
             ddl_series = df.iloc[:, 0]
         ddls = ddl_series.dropna().astype(str).str.strip().tolist()
@@ -265,7 +288,9 @@ def extract_ddls_from_file(file_path: str, file_type: str) -> list:
     return ddls
 
 
-def apply_ddl_to_databricks(sql_file: str, config: MetadataConfig, file_type: str) -> None:
+def apply_ddl_to_databricks(
+    sql_file: str, config: MetadataConfig, file_type: str
+) -> None:
     """
     Apply DDL statements from a SQL, XLSX, or TSV file to Databricks Delta tables in Unity Catalog.
     """
@@ -290,9 +315,7 @@ def apply_ddl_to_databricks(sql_file: str, config: MetadataConfig, file_type: st
 
 
 def process_metadata_file(
-    config: MetadataConfig,
-    input_file: str,
-    export_format: Optional[str] = None
+    config: MetadataConfig, input_file: str, export_format: Optional[str] = None
 ) -> None:
     """
     Main processing function to load, update, export, and optionally apply DDLs.
@@ -304,29 +327,44 @@ def process_metadata_file(
     """
     file_check = check_file_type(input_file, config)
     try:
-        sanitized_email = sanitize_email(config.current_user)
+        sanitized_email = sanitize_user_identifier(config.current_user)
         current_date = datetime.now().strftime("%Y%m%d")
         input_dir = output_dir = os.path.join(
-            "/Volumes", config.catalog_name, config.schema_name,
-            "generated_metadata", sanitized_email, "reviewed_outputs"
+            "/Volumes",
+            config.catalog_name,
+            config.schema_name,
+            "generated_metadata",
+            sanitized_email,
+            "reviewed_outputs",
         )
         output_dir = os.path.join(
-            "/Volumes", config.catalog_name, config.schema_name,
-            "generated_metadata", sanitized_email, current_date, "exportable_run_logs"
+            "/Volumes",
+            config.catalog_name,
+            config.schema_name,
+            "generated_metadata",
+            sanitized_email,
+            current_date,
+            "exportable_run_logs",
         )
         input_file_type = config.review_input_file_type
-        output_file_type = export_format or config.review_output_file_type 
+        output_file_type = export_format or config.review_output_file_type
         df = load_metadata_file(os.path.join(input_dir, input_file), input_file_type)
-        if config.mode == 'pi':
-            df[['classification', 'type', 'ddl']] = df.apply(
-                lambda row: update_ddl_row('pi', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
+        if config.mode == "pi":
+            df[["classification", "type", "ddl"]] = df.apply(
+                lambda row: update_ddl_row("pi", config.column_with_reviewed_ddl, row),
+                axis=1,
+                result_type="expand",
             )
-        elif config.mode == 'comment':
-            df[['column_content', 'ddl']] = df.apply(
-                lambda row: update_ddl_row('comment', config.column_with_reviewed_ddl, row), axis=1, result_type='expand'
+        elif config.mode == "comment":
+            df[["column_content", "ddl"]] = df.apply(
+                lambda row: update_ddl_row(
+                    "comment", config.column_with_reviewed_ddl, row
+                ),
+                axis=1,
+                result_type="expand",
             )
         exported_file = export_metadata(df, output_dir, input_file, output_file_type)
-        if getattr(config, 'apply_reviewed_ddl', True):
+        if getattr(config, "apply_reviewed_ddl", True):
             apply_ddl_to_databricks(exported_file, config, output_file_type)
         else:
             print("DDL application is only supported for SQL export format.")

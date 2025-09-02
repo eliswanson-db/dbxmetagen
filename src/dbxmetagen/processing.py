@@ -55,6 +55,7 @@ from openai.types.chat.chat_completion import (
 )
 from mlflow.types.llm import TokenUsageStats, ChatResponse
 
+
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.sampling import determine_sampling_ratio
 from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
@@ -77,6 +78,7 @@ from src.dbxmetagen.overrides import (
     build_condition,
     get_join_conditions,
 )
+from src.dbxmetagen.user_utils import sanitize_user_identifier
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -727,11 +729,11 @@ def get_control_table(config: MetadataConfig) -> str:
     spark = SparkSession.builder.getOrCreate()
     if config.job_id and config.cleanup_control_table == "true":
         formatted_control_table = config.control_table.format(
-            sanitize_email(get_current_user())
+            sanitize_user_identifier(get_current_user())
         ) + str(config.job_id)
     else:
         formatted_control_table = config.control_table.format(
-            sanitize_email(get_current_user())
+            sanitize_user_identifier(get_current_user())
         )
     return formatted_control_table
 
@@ -846,7 +848,7 @@ def _export_table_to_tsv(df, config):
 
         filename = f"review_metadata_{config.mode}_{config.log_timestamp}.tsv"
         local_path = f"/local_disk0/tmp/{filename}"
-        current_user = sanitize_email(get_current_user())
+        current_user = sanitize_user_identifier(get_current_user())
         table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
         volume_path = (
             f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
@@ -957,7 +959,7 @@ def _export_table_to_excel(df: Any, config: Any) -> str:
     timestamp = config.log_timestamp
 
     try:
-        current_user = sanitize_email(get_current_user())
+        current_user = sanitize_user_identifier(get_current_user())
         table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
         volume_path = (
             f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
@@ -1715,6 +1717,8 @@ def apply_comment_ddl(df: DataFrame, config: MetadataConfig) -> None:
     spark = SparkSession.builder.getOrCreate()
     ddl_statements = df.select("ddl").collect()
     for row in ddl_statements:
+        logger.debug(f"Applying DDL statement: {row['ddl']}")
+        print("Applying DDL statement: ", row["ddl"])
         ddl_statement = row["ddl"]
         if not config.dry_run:
             spark.sql(ddl_statement)
@@ -2032,14 +2036,16 @@ def setup_ddl(config: MetadataConfig) -> None:
         spark.sql(
             f"CREATE SCHEMA IF NOT EXISTS {config.catalog_name}.{config.schema_name};"
         )
-    print(
-        f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};"
-    )
+    volume_sql = f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};"
+    print(f"DEBUG: About to execute volume SQL: {volume_sql}")
+    print(f"DEBUG: catalog_name = '{config.catalog_name}'")
+    print(f"DEBUG: schema_name = '{config.schema_name}'")
+    print(f"DEBUG: volume_name = '{config.volume_name}'")
+    print(f"DEBUG: current_user = '{getattr(config, 'current_user', 'NOT_SET')}'")
+
     if config.volume_name:
-        spark.sql(
-            f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};"
-        )
-        review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_email(config.current_user)}/reviewed_outputs/"
+        spark.sql(volume_sql)
+        review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_user_identifier(config.current_user)}/reviewed_outputs/"
         os.makedirs(review_output_path, exist_ok=True)
 
 
@@ -2060,19 +2066,6 @@ def create_tables(config: MetadataConfig) -> None:
         spark.sql(
             f"""CREATE TABLE IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{formatted_control_table} (table_name STRING, _updated_at TIMESTAMP, _deleted_at TIMESTAMP)"""
         )
-
-
-def sanitize_email(email: str) -> str:
-    """
-    Replaces '@' and '.' in an email address with '_'.
-
-    Args:
-        email (str): The email address to sanitize.
-
-    Returns:
-        str: The sanitized email address.
-    """
-    return email.replace("@", "_").replace(".", "_")
 
 
 def instantiate_metadata_objects(
@@ -2141,7 +2134,7 @@ def generate_and_persist_metadata(config: Any) -> None:
                 log_dict = {
                     "full_table_name": table,
                     "status": "Table does not exist",
-                    "user": sanitize_email(config.current_user),
+                    "user": sanitize_user_identifier(config.current_user),
                     "mode": config.mode,
                     "apply_ddl": config.apply_ddl,
                     "_updated_at": str(datetime.now()),
@@ -2155,7 +2148,7 @@ def generate_and_persist_metadata(config: Any) -> None:
                 log_dict = {
                     "full_table_name": table,
                     "status": "Table processed",
-                    "user": sanitize_email(config.current_user),
+                    "user": sanitize_user_identifier(config.current_user),
                     "mode": config.mode,
                     "apply_ddl": config.apply_ddl,
                     "_updated_at": str(datetime.now()),
@@ -2168,7 +2161,7 @@ def generate_and_persist_metadata(config: Any) -> None:
             log_dict = {
                 "full_table_name": table,
                 "status": f"Processing failed: {tpe}",
-                "user": sanitize_email(config.current_user),
+                "user": sanitize_user_identifier(config.current_user),
                 "mode": config.mode,
                 "apply_ddl": config.apply_ddl,
                 "_updated_at": str(datetime.now()),
@@ -2182,7 +2175,7 @@ def generate_and_persist_metadata(config: Any) -> None:
             log_dict = {
                 "full_table_name": table,
                 "status": f"Processing failed: {e}",
-                "user": sanitize_email(config.current_user),
+                "user": sanitize_user_identifier(config.current_user),
                 "mode": config.mode,
                 "apply_ddl": config.apply_ddl,
                 "_updated_at": str(datetime.now()),
@@ -2243,6 +2236,8 @@ def setup_queue(config: MetadataConfig) -> List[str]:
     config_table_names = [
         name.strip() for name in config_table_string.split(",") if len(name.strip()) > 0
     ]
+    # Expand schema wildcards in config table names as well
+    config_table_names = expand_schema_wildcards(config_table_names)
     file_table_names = load_table_names_from_csv(config.source_file_path)
     combined_table_names = list(
         set().union(queued_table_names, config_table_names, file_table_names)
@@ -2339,7 +2334,11 @@ def load_table_names_from_csv(csv_file_path):
         print(
             f"Successfully loaded {len(table_names)} table names from CSV using local file access"
         )
-        return sanitize_string_list(table_names)
+        # Sanitize the table names first
+        sanitized_names = sanitize_string_list(table_names)
+        # Then expand any schema wildcards
+        expanded_names = expand_schema_wildcards(sanitized_names)
+        return expanded_names
     except Exception as e:
         print(f"Local file access failed (likely serverless): {str(e)[:200]}...")
 
@@ -2362,12 +2361,94 @@ def load_table_names_from_csv(csv_file_path):
             print(
                 f"Successfully loaded {len(table_names)} table names from CSV using pandas"
             )
-            return sanitize_string_list(table_names)
+            # Sanitize the table names first
+            sanitized_names = sanitize_string_list(table_names)
+            # Then expand any schema wildcards
+            expanded_names = expand_schema_wildcards(sanitized_names)
+            return expanded_names
 
         except Exception as pandas_error:
             print(f"Pandas CSV read also failed: {pandas_error}")
             print("Returning empty list - no table names loaded from CSV")
             return []
+
+
+def is_schema_wildcard(table_name: str) -> bool:
+    """
+    Check if a table name is a schema wildcard pattern (catalog.schema.*).
+
+    Args:
+        table_name (str): The table name to check.
+
+    Returns:
+        bool: True if the table name is a schema wildcard pattern.
+    """
+    return table_name.strip().endswith(".*") and table_name.count(".") == 2
+
+
+def get_tables_in_schema(catalog_name: str, schema_name: str) -> List[str]:
+    """
+    Get all table names in a given catalog and schema.
+
+    Args:
+        catalog_name (str): The catalog name.
+        schema_name (str): The schema name.
+
+    Returns:
+        List[str]: A list of fully qualified table names.
+    """
+    spark = SparkSession.builder.getOrCreate()
+
+    try:
+        # Use SHOW TABLES to get all tables in the schema
+        tables_df = spark.sql(f"SHOW TABLES IN {catalog_name}.{schema_name}")
+
+        # Extract table names and create fully qualified names
+        table_names = []
+        for row in tables_df.collect():
+            table_name = row["tableName"]
+            fully_qualified_name = f"{catalog_name}.{schema_name}.{table_name}"
+            table_names.append(fully_qualified_name)
+
+        print(f"Found {len(table_names)} tables in schema {catalog_name}.{schema_name}")
+        return table_names
+
+    except Exception as e:
+        print(
+            f"Error retrieving tables from schema {catalog_name}.{schema_name}: {str(e)}"
+        )
+        return []
+
+
+def expand_schema_wildcards(table_names: List[str]) -> List[str]:
+    """
+    Expand schema wildcard patterns in a list of table names.
+
+    Args:
+        table_names (List[str]): List of table names, possibly containing wildcards.
+
+    Returns:
+        List[str]: Expanded list of table names with wildcards resolved.
+    """
+    expanded_names = []
+
+    for table_name in table_names:
+        if is_schema_wildcard(table_name):
+            # Extract catalog and schema from the wildcard pattern
+            parts = table_name.replace(".*", "").split(".")
+            if len(parts) == 2:
+                catalog_name, schema_name = parts
+                # Get all tables in the schema
+                schema_tables = get_tables_in_schema(catalog_name, schema_name)
+                expanded_names.extend(schema_tables)
+                print(f"Expanded {table_name} to {len(schema_tables)} tables")
+            else:
+                print(f"Warning: Invalid wildcard pattern {table_name}, skipping")
+        else:
+            # Regular table name, add as-is
+            expanded_names.append(table_name)
+
+    return expanded_names
 
 
 def sanitize_string_list(string_list: List[str]):
@@ -2377,7 +2458,12 @@ def sanitize_string_list(string_list: List[str]):
         s = s.strip()
         s = " ".join(s.split())
         s = s.lower()
-        s = "".join(c for c in s if c.isalnum() or c.isspace() or c == "." or c == "_")
+        # Allow asterisk for wildcard patterns
+        s = "".join(
+            c
+            for c in s
+            if c.isalnum() or c.isspace() or c == "." or c == "_" or c == "*"
+        )
         sanitized_list.append(s)
     return sanitized_list
 

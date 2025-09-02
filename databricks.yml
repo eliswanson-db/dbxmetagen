@@ -26,7 +26,7 @@ targets:
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
-      - service_principal_name: ${var.app_service_principal_application_id}
+      - service_principal_name: 034f50f1-0a51-4d3d-9137-ca312e31fc23
         level: CAN_MANAGE
 
   prod:

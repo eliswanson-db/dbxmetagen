@@ -53,13 +53,13 @@ variables:
       - OpenAI: https://api.openai.com/v1
       - Azure OpenAI: https://your-resource.openai.azure.com
       - Anthropic: https://api.anthropic.com
-    default: null
+    default: ""
   custom_endpoint_secret_scope:
     description: |
       Databricks secret scope containing the API key/token for custom endpoints. Only used when chat_completion_type is 'openai_spec' or 'custom_chat_spec'.
       The secret should contain the Bearer token or API key for authentication.
       Example: Create a secret scope called 'openai-secrets' and store your API key there.
-    default: null
+    default: ""
   custom_endpoint_secret_key:
     description: |
       Key name within the secret scope for the API token. Only used when chat_completion_type is 'openai_spec' or 'custom_chat_spec'.
@@ -69,6 +69,9 @@ variables:
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
+  create_test_data:
+    description: Flag to create test data during deployment. Set via --create-test-data flag in deploy_app.sh
+    default: false
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
     default: true
@@ -181,3 +184,9 @@ variables:
   column_with_reviewed_ddl:
     description: When reviewing content and supplying it back to the sync process, do not modify the DDL column, modify the columns 'column_content' or 'type' and 'classification'. For the alternative column the specified option should just be 'other'. We will add an option to modify the DDL in a future release.
     default: other
+  app_service_principal_application_id:
+    description: Application ID of the service principal used for the Databricks app. This service principal will be granted CAN_MANAGE permissions on the bundle resources. If not set, the app will use the current user context.
+    default: ${workspace.current_user.userName}
+  debug_mode:
+    description: Enable debug mode for detailed logging and debugging features in the application and jobs. Set to true for development environments.
+    default: false

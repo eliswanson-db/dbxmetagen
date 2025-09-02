@@ -134,11 +134,23 @@ deploy_bundle() {
     
     echo "🎯 Deploying to target: $TARGET"
     
-    # Pass debug mode variable to bundle deployment
+    # Build deployment variables
+    DEPLOY_VARS=""
     if [ "$DEBUG_MODE" = true ]; then
-        echo "🐛 Debug mode: Deploying with debug_mode=true"
-        if databricks bundle deploy --target "$TARGET" --var="debug_mode=true"; then
-            echo "✅ Bundle deployed successfully to $TARGET with debug mode"
+        DEPLOY_VARS="$DEPLOY_VARS --var=debug_mode=true"
+        echo "🐛 Debug mode enabled"
+    fi
+    if [ "$CREATE_TEST_DATA" = true ]; then
+        DEPLOY_VARS="$DEPLOY_VARS --var=create_test_data=true"
+        echo "🧪 Test data generation enabled"
+    fi
+    
+    # Deploy with variables
+    echo "🚀 Deploying bundle to $TARGET..."
+    if [ -n "$DEPLOY_VARS" ]; then
+        echo "📝 Deployment variables: $DEPLOY_VARS"
+        if databricks bundle deploy --target "$TARGET" $DEPLOY_VARS; then
+            echo "✅ Bundle deployed successfully to $TARGET"
             
             # Store target for later use
             export DEPLOY_TARGET="$TARGET"
@@ -147,7 +159,7 @@ deploy_bundle() {
             exit 1
         fi
     else
-        if databricks bundle deploy --target "$TARGET" --var="debug_mode=false"; then
+        if databricks bundle deploy --target "$TARGET"; then
             echo "✅ Bundle deployed successfully to $TARGET"
             
             # Store target for later use
@@ -553,6 +565,7 @@ main() {
 # Parse command line arguments
 SKIP_PERMISSIONS=false
 DEBUG_MODE=false
+CREATE_TEST_DATA=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -563,6 +576,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --skip-permissions    Skip the permissions setup job"
+            echo "  --create-test-data    Generate life sciences demo data after deployment"
             echo "  --debug              Enable debug mode for detailed logging"
             echo "  --help, -h           Show this help message"
             echo ""
@@ -573,6 +587,7 @@ while [[ $# -gt 0 ]]; do
             echo "  4. Deploy the bundle resources"
             echo "  5. Start the Streamlit app via CLI command"
             echo "  6. Run the permissions setup job (unless --skip-permissions is used)"
+            echo "  7. Generate life sciences demo data (if --create-test-data is used)"
             echo ""
             echo "Prerequisites:"
             echo "  - Databricks CLI installed and configured"
@@ -583,6 +598,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-permissions)
             SKIP_PERMISSIONS=true
+            shift
+            ;;
+        --create-test-data)
+            CREATE_TEST_DATA=true
             shift
             ;;
         --debug)

@@ -16,7 +16,13 @@ from databricks.sdk.service.jobs import (
     NotebookTask,
     JobCluster,
     ClusterSpec,
+    JobEnvironment,
+    Task,
+    PerformanceTarget,
+    # Environment,
+    # EnvironmentSpec,
 )
+from databricks.sdk.service.compute import Environment
 import base64
 import logging
 import sys
@@ -289,7 +295,7 @@ class DBXMetaGenApp:
         self.setup_client()
 
     def setup_client(self):
-        """Initialize Databricks workspace client using service principal"""
+        """Initialize Databricks workspace client with user impersonation"""
         # Check if already initialized
         if st.session_state.get("workspace_client") is not None:
             return
@@ -297,12 +303,68 @@ class DBXMetaGenApp:
         try:
             host = os.environ.get("DATABRICKS_HOST")
             if host:
-                # Initialize workspace client with service principal authentication
-                workspace_client = WorkspaceClient(host=host)
+                # Try to get user token from Streamlit context for impersonation
+                user_token = None
+                try:
+                    # Method 1: Check Streamlit's request context
+                    from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+                    ctx = get_script_run_ctx()
+                    if ctx and hasattr(ctx, "session_info"):
+                        session_info = ctx.session_info
+                        if hasattr(session_info, "headers"):
+                            headers = session_info.headers
+                            user_token = (
+                                headers.get("x-forwarded-access-token")
+                                or headers.get("x-forwarded-user-token")
+                                or headers.get("authorization", "").replace(
+                                    "Bearer ", ""
+                                )
+                            )
+                except Exception:
+                    pass
+
+                # Method 2: Try query parameters (sometimes user token is passed this way)
+                if not user_token:
+                    try:
+                        query_params = st.query_params
+                        user_token = query_params.get("token") or query_params.get(
+                            "access_token"
+                        )
+                    except Exception:
+                        pass
+
+                # Method 3: Environment variable (if set by app framework)
+                if not user_token:
+                    user_token = os.environ.get("DATABRICKS_USER_TOKEN")
+
+                if user_token:
+                    # Create user-impersonated client
+                    workspace_client = WorkspaceClient(host=host, token=user_token)
+                    st.session_state.user_impersonated = True
+
+                    # Get the actual user to confirm impersonation
+                    try:
+                        current_user = workspace_client.current_user.me()
+                        st.success(
+                            f"✅ Connected with user impersonation as: {current_user.user_name}"
+                        )
+                        logger.debug(
+                            f"User impersonation successful for: {current_user.user_name}"
+                        )
+                    except Exception:
+                        st.success("✅ Connected with user impersonation")
+                        logger.debug("Workspace client initialized with user token")
+                else:
+                    workspace_client = WorkspaceClient(host=host)
+                    st.session_state.user_impersonated = False
+                    st.info(
+                        "ℹ️ Connected with service principal (user token not available)"
+                    )
+                    logger.debug("Workspace client initialized with service principal")
+
                 st.session_state.workspace_client = workspace_client
                 st.session_state.databricks_host = host
-                st.success("✅ Connected to Databricks workspace successfully")
-                logger.debug(f"Workspace client initialized for host: {host}")
             else:
                 st.warning(
                     "⚠️ DATABRICKS_HOST environment variable not found. Some features may not work."
@@ -602,13 +664,17 @@ class DBXMetaGenApp:
                     self.save_table_list(tables)
 
             with col3:
-                if st.button("🚀 Create Job", type="primary"):
-                    debug_log("Create Job button clicked")
-                    self.show_job_creation_dialog(tables)
+                # TODO: Fix this. For now, we're subbing in Run Job Manager, but for some reason create and run job is failing, and there's no reason it should.
+                # if st.button("🚀 Create Job", type="primary"):
+                #     debug_log("Create Job button clicked")
+                #     print("[UI] 🚀 Create Job button clicked")
+                #     # Use session state to trigger dialog display
+                #     st.session_state.show_job_dialog = True
+                #     st.session_state.job_dialog_tables = tables
 
                 # Add test button temporarily for debugging
-                if st.button("🔧 Test Job Manager", help="Debug job manager"):
-                    st.write("**🔧 Testing Job Manager...**")
+                if st.button("🔧 Create and Run Job", help="Debug job manager"):
+                    st.write("**🔧 Running Job Manager...**")
 
                     try:
                         if not JOB_MANAGER_AVAILABLE:
@@ -619,8 +685,9 @@ class DBXMetaGenApp:
                         job_manager = DBXMetaGenJobManager(
                             st.session_state.workspace_client
                         )
+                        current_user_email = get_current_user_email()
                         job_manager.create_metadata_job(
-                            job_name="dbxmetagen_test_job_from_app_eli",
+                            job_name=f"dbxmetagen_test_job_from_app_{current_user_email}",
                             tables=tables,
                             cluster_size="Small (1-2 workers)",
                             config=st.session_state.config,
@@ -659,8 +726,17 @@ class DBXMetaGenApp:
                 "⚠️ No tables selected. Please enter table names or upload a CSV file."
             )
 
+        # Check if job dialog should be displayed
+        if st.session_state.get("show_job_dialog", False):
+            self.show_job_creation_dialog(st.session_state.get("job_dialog_tables", []))
+            # Clear the flag after showing
+            st.session_state.show_job_dialog = False
+
     def show_job_creation_dialog(self, tables: List[str]):
         """Show job creation dialog with configuration options"""
+        print(f"[UI] show_job_creation_dialog called with {len(tables)} tables")
+        debug_log(f"show_job_creation_dialog called with {len(tables)} tables")
+
         st.markdown("---")
         st.subheader("🚀 Create Metadata Generation Job")
 
@@ -709,461 +785,156 @@ class DBXMetaGenApp:
 
             # Create and run button
             if st.button("🚀 Create & Run Job", type="primary", key="create_job_main"):
-                print("Create & Run Job button clicked")
+                print(f"[UI] Create & Run Job button clicked")
+                print(f"[UI]   - job_name: {job_name}")
+                print(f"[UI]   - tables: {len(tables)} tables")
+                print(f"[UI]   - cluster_size: {cluster_size}")
+                print(
+                    f"[UI]   - tables list: {tables[:3]}{'...' if len(tables) > 3 else ''}"
+                )
+
                 debug_log(
                     f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
                 )
                 logger.debug(
-                    "Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
+                    f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
                 )
                 logger.info(
-                    "Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
+                    f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
                 )
-                self.create_and_run_job(job_name, tables, cluster_size)
+                try:
+                    self.create_and_run_job(job_name, tables, cluster_size)
+                except Exception as create_job_e:
+                    st.error(f"❌ Failed to create job: {create_job_e}")
+                    print(f"[UI] ERROR in create_and_run_job: {create_job_e}")
+                    import traceback
+
+                    st.code(traceback.format_exc())
 
     def create_and_run_job(self, job_name: str, tables: List[str], cluster_size: str):
-        """Simplified job creation using JobManager"""
-        debug_log("Starting create_and_run_job_enhanced method")
-        st.write("**📝 Job Creation Log:**")
+        """Create and run a metadata generation job - using working logic from test_job_manager"""
+        st.write("**📝 Job Creation Process:**")
 
         # Validate prerequisites
         if not st.session_state.workspace_client:
-            debug_log("ERROR: Databricks client not initialized")
-            st.error("❌ Databricks client not initialized")
-            return
-
+            raise RuntimeError("Databricks client not initialized")
         if not tables:
-            debug_log("ERROR: No tables specified for processing")
-            st.error("❌ No tables specified for processing")
-            return
+            raise ValueError("No tables specified for processing")
+        if not JOB_MANAGER_AVAILABLE:
+            raise RuntimeError(f"Job manager not available: {JOB_MANAGER_IMPORT_ERROR}")
 
-        debug_log(
-            f"Prerequisites validated - workspace_client exists: {st.session_state.workspace_client is not None}, tables count: {len(tables)}"
+        with st.spinner("🚀 Creating and starting job..."):
+            # Use the same approach as test_job_manager - load config fresh from YAML
+            st.write("• 📁 Loading fresh config from variables.yml...")
+        import yaml
+        import os
+
+        config_path = "./variables.yml"
+        if not os.path.exists(config_path):
+            # Try app directory
+            config_path = "app/variables.yml"
+
+        with open(config_path, "r") as f:
+            fresh_config = yaml.safe_load(f)
+
+        # Generate unique job name like test_job_manager does
+        current_user = st.session_state.workspace_client.current_user.me()
+        user_email = current_user.user_name
+        username = user_email.split("@")[0]  # Get username part before @
+
+        # CRITICAL: Override current_user in config to prevent service principal contamination
+        st.write(
+            "• 🛠️ Fixing config current_user to prevent service principal contamination..."
+        )
+        st.write(
+            f"• 🔍 Before override: current_user = {fresh_config.get('current_user', 'NOT_FOUND')}"
         )
 
-        # Check if job manager is available
-        if not JOB_MANAGER_AVAILABLE:
-            debug_log(f"ERROR: Job manager not available - {JOB_MANAGER_IMPORT_ERROR}")
-            st.error(f"❌ Job manager not available: {JOB_MANAGER_IMPORT_ERROR}")
-            st.info("💡 Make sure job_manager.py is in the same directory as app.py")
-            return
+        # Ensure we set the actual resolved user, not the template
+        fresh_config["current_user"] = (
+            user_email  # Use actual user, not service principal
+        )
+        st.write(f"• ✅ After override: current_user = {fresh_config['current_user']}")
 
-        # try:
-        if 1 == 1:
-            with st.spinner("🚀 Creating and starting job..."):
-                print(f"[JOB_CREATION] Starting job creation process")
-
-                # Create job manager
-                st.write("• 🔧 Initializing job manager...")
-                debug_log("Initializing job manager")
-                print(f"[JOB_CREATION] About to create job manager")
-
-                try:
-                    job_manager = DBXMetaGenJobManager(
-                        st.session_state.workspace_client
-                    )
-                    st.write("• ✅ Job manager initialized")
-                    debug_log("Job manager initialized successfully")
-                    print(f"[JOB_CREATION] Job manager created successfully")
-
-                    # Test the job manager immediately
-                    print(f"[JOB_CREATION] Job manager type: {type(job_manager)}")
-                    print(
-                        f"[JOB_CREATION] Job manager has create_metadata_job: {hasattr(job_manager, 'create_metadata_job')}"
-                    )
-
-                    # Test workspace client
-                    print(
-                        f"[JOB_CREATION] Workspace client type: {type(st.session_state.workspace_client)}"
-                    )
-
-                except Exception as jm_init_error:
-                    st.error(
-                        f"❌ Job manager initialization failed: {str(jm_init_error)}"
-                    )
-                    print(
-                        f"[JOB_CREATION] Job manager init error: {str(jm_init_error)}"
-                    )
-                    with st.expander("🔍 Job Manager Init Error Details"):
-                        st.code(str(jm_init_error))
-                        import traceback
-
-                        st.code(traceback.format_exc())
-                    return
-
-                # Get current user and generate unique job name
-                st.write("• 🔍 Getting current user information...")
-                print(f"[JOB_CREATION] Getting current user info")
-                try:
-                    current_user = st.session_state.workspace_client.current_user.me()
-                    user_email = current_user.user_name
-                    username = user_email.split("@")[0]  # Get username part before @
-
-                    # Generate unique job name following test_job_manager pattern
-                    if not job_name or job_name.startswith("dbxmetagen_job_"):
-                        # Generate a user-specific job name if default or auto-generated
-                        from datetime import datetime
-
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        job_name = f"{username}_dbxmetagen_job_{timestamp}"
-
-                    st.write(f"• ✅ Current user: {user_email}")
-                    st.write(f"• 📝 Job name: {job_name}")
-                    print(f"[JOB_CREATION] Current user: {user_email}")
-                    print(f"[JOB_CREATION] Job name: {job_name}")
-                except Exception as e:
-                    user_email = None
-                    st.write(f"• ⚠️ Could not get user email: {str(e)}")
-                    print(f"[JOB_CREATION] Failed to get user: {str(e)}")
-                    # Fallback job name
-                    from datetime import datetime
-
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    job_name = f"dbxmetagen_job_{timestamp}"
-
-                # Debug configuration
-                st.write("• 📊 Configuration details:")
-                st.write(f"  - Cluster size: {cluster_size}")
-                st.write(f"  - Tables: {len(tables)}")
-                st.write(f"  - Mode: {st.session_state.config.get('mode', 'comment')}")
-                st.write(
-                    f"  - Catalog: {st.session_state.config.get('catalog_name', 'Not set')}"
+        # Also check other config values that might contain the template
+        for key, value in fresh_config.items():
+            if isinstance(value, str) and "${workspace.current_user.userName}" in value:
+                st.write(f"• 🔧 Fixing template in {key}: {value}")
+                fresh_config[key] = value.replace(
+                    "${workspace.current_user.userName}", user_email
                 )
-                st.write(f"  - Host: {st.session_state.config.get('host', 'Not set')}")
-                print(
-                    f"[JOB_CREATION] Config - Tables: {len(tables)}, Cluster: {cluster_size}"
-                )
-                print(
-                    f"[JOB_CREATION] Config - Catalog: {st.session_state.config.get('catalog_name')}, Host: {st.session_state.config.get('host')}"
-                )
+                st.write(f"• ✅ Fixed {key} = {fresh_config[key]}")
 
-                # Validate critical config
-                catalog_name = st.session_state.config.get("catalog_name")
-                if not catalog_name:
-                    st.error(
-                        "❌ Catalog name not configured. Please set it in the sidebar."
-                    )
-                    print(f"[JOB_CREATION] ERROR: No catalog name configured")
-                    return
+        st.write("• 🔧 Initializing job manager...")
+        job_manager = DBXMetaGenJobManager(st.session_state.workspace_client)
 
-                host = st.session_state.config.get("host")
-                if not host:
-                    st.error(
-                        "❌ Databricks host not configured. Please set it in the sidebar."
-                    )
-                    print(f"[JOB_CREATION] ERROR: No host configured")
-                    return
+        from datetime import datetime
 
-                # Create and run job
-                # Check for and clean up existing jobs (following test_job_manager pattern)
-                st.write(f"• 🔍 Checking for existing job: {job_name}")
-                print(f"[JOB_CREATION] Looking for existing job with name: {job_name}")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_name = f"{username}_app_job_{timestamp}"
 
-                try:
-                    existing_jobs = st.session_state.workspace_client.jobs.list(
-                        name=job_name
-                    )
-                    existing_job_id = None
+        st.write(f"• 📝 Job: {job_name}")
+        st.write(f"• 👤 User: {user_email}")
 
-                    for job in existing_jobs:
-                        if job.settings.name == job_name:
-                            existing_job_id = job.job_id
-                            print(
-                                f"[JOB_CREATION] Found existing job with ID: {existing_job_id}"
-                            )
-                            break
+        # Clean up existing jobs with same name (like test_job_manager)
+        st.write(f"• 🔍 Looking for existing job with name: {job_name}")
+        existing_jobs = st.session_state.workspace_client.jobs.list(name=job_name)
+        existing_job_id = None
 
-                    if existing_job_id:
-                        st.write(f"• 🗑️ Deleting existing job: {existing_job_id}")
-                        print(
-                            f"[JOB_CREATION] Deleting existing job: {existing_job_id}"
-                        )
-                        try:
-                            st.session_state.workspace_client.jobs.delete(
-                                existing_job_id
-                            )
-                            st.write("• ✅ Existing job deleted successfully")
-                            print("[JOB_CREATION] Existing job deleted successfully")
-                        except Exception as delete_error:
-                            st.write(
-                                f"• ⚠️ Warning: Could not delete existing job: {delete_error}"
-                            )
-                            print(
-                                f"[JOB_CREATION] Warning: Could not delete existing job: {delete_error}"
-                            )
-                    else:
-                        st.write("• ✅ No existing job found")
-                        print("[JOB_CREATION] No existing job found")
+        for job in existing_jobs:
+            if job.settings.name == job_name:
+                existing_job_id = job.job_id
+                st.write(f"• 🔍 Found existing job with ID: {existing_job_id}")
+                break
 
-                except Exception as list_error:
-                    st.write(
-                        f"• ⚠️ Warning: Could not check for existing jobs: {list_error}"
-                    )
-                    print(
-                        f"[JOB_CREATION] Warning: Could not check for existing jobs: {list_error}"
-                    )
+        if existing_job_id:
+            st.write(f"• 🗑️ Deleting existing job: {existing_job_id}")
+            try:
+                st.session_state.workspace_client.jobs.delete(existing_job_id)
+                st.write("• ✅ Existing job deleted successfully")
+            except Exception as e:
+                st.write(f"• ⚠️ Warning: Could not delete existing job: {e}")
+                st.write("• Continuing with job creation...")
+        else:
+            st.write("• ✅ No existing job found")
 
-                st.write("• 🚀 Creating job...")
-                if user_email:
-                    st.write(f"• 🔑 Will set job permissions for: {user_email}")
-                else:
-                    st.write("• ⚠️ No user email - job may not be visible to you")
+        # Convert tables list to string format like test_job_manager
+        if isinstance(tables, list):
+            tables_str = ",".join(tables)
+        else:
+            tables_str = str(tables)
 
-                # Add detailed logging before job creation
-                debug_log(
-                    f"Creating job with parameters: job_name={job_name}, tables_count={len(tables)}, cluster_size={cluster_size}"
-                )
-                debug_log(f"Config keys: {list(st.session_state.config.keys())}")
+        st.write(f"• 📊 Tables: {tables_str}")
+        st.write("• 🚀 Creating and running job...")
 
-                st.write("• 📋 Calling job manager to create job...")
-                debug_log("About to call job_manager.create_metadata_job")
-                print(f"[JOB_CREATION] About to call job_manager.create_metadata_job")
-                print(f"[JOB_CREATION] Job name: {job_name}")
-                print(f"[JOB_CREATION] Tables: {tables}")
-                print(f"[JOB_CREATION] Cluster size: {cluster_size}")
+        # Create job using fresh config (avoiding service principal contamination)
+        job_id, run_id = job_manager.create_metadata_job(
+            job_name=job_name,
+            tables=tables_str,  # Use string format like test_job_manager
+            cluster_size=cluster_size,
+            config=fresh_config,  # Use fresh YAML config, not processed session config
+            user_email=user_email,
+        )
 
-                # Validate all parameters before calling
-                if not job_name:
-                    st.error("❌ Job name is empty!")
-                    print(f"[JOB_CREATION] ERROR: Job name is empty")
-                    return
-                if not tables:
-                    st.error("❌ No tables selected!")
-                    print(f"[JOB_CREATION] ERROR: No tables selected")
-                    return
-                if not cluster_size:
-                    st.error("❌ Cluster size not specified!")
-                    print(f"[JOB_CREATION] ERROR: Cluster size not specified")
-                    return
-                if not st.session_state.config:
-                    st.error("❌ Configuration is missing!")
-                    print(f"[JOB_CREATION] ERROR: Configuration is missing")
-                    return
+        st.write(f"• ✅ Job created with ID: {job_id}")
+        st.write(f"• ✅ Run started with ID: {run_id}")
 
-                print(f"[JOB_CREATION] All parameters validated successfully")
-                logger.info("✅ All job creation parameters validated successfully")
+        # Store in session for monitoring
+        st.session_state.job_runs[run_id] = {
+            "job_id": job_id,
+            "job_name": job_name,
+            "run_id": run_id,
+            "tables": tables,
+            "status": "PENDING",
+            "start_time": datetime.now(),
+            "mode": fresh_config.get("mode", "comment"),
+            "cluster_size": cluster_size,
+            "table_count": len(tables),
+        }
 
-                # CRITICAL: Proper error handling to catch job creation failures
-                logger.info(
-                    f"📋 About to call job_manager.create_metadata_job with job_name={job_name}"
-                )
-                try:
-                    job_id, run_id = job_manager.create_metadata_job(
-                        job_name=job_name,
-                        tables=tables,
-                        cluster_size=cluster_size,
-                        config=st.session_state.config,
-                        user_email=user_email,
-                    )
-
-                    success_msg = (
-                        f"✅ Job created successfully: job_id={job_id}, run_id={run_id}"
-                    )
-                    logger.info(success_msg)
-                    debug_log(success_msg)
-                    print(f"[JOB_CREATION] {success_msg}")
-
-                    # Validate the return values
-                    if not job_id or not run_id:
-                        raise ValueError(
-                            f"Job manager returned invalid values: job_id={job_id}, run_id={run_id}"
-                        )
-
-                except Exception as job_mgr_error:
-                    error_msg = f"❌ Job creation failed: {str(job_mgr_error)}"
-                    logger.error(error_msg)
-                    logger.error(f"Error type: {type(job_mgr_error).__name__}")
-
-                    debug_log(error_msg)
-                    print(f"[JOB_CREATION] ERROR: {error_msg}")
-                    print(f"[JOB_CREATION] Error type: {type(job_mgr_error).__name__}")
-                    st.error(error_msg)
-
-                    # Show the specific error details for debugging
-                    with st.expander("🔍 Job Manager Error Details"):
-                        st.write("**Error Message:**")
-                        st.code(str(job_mgr_error))
-
-                        st.write("**Full Traceback:**")
-                        import traceback
-
-                        error_traceback = traceback.format_exc()
-                        st.code(error_traceback)
-                        logger.error(f"Full traceback: {error_traceback}")
-
-                        st.write("**Debug Info:**")
-                        st.write(f"- Job Manager Available: {JOB_MANAGER_AVAILABLE}")
-                        st.write(
-                            f"- Workspace Client: {st.session_state.workspace_client}"
-                        )
-                        st.write(f"- Config: {st.session_state.config}")
-
-                        # Log debug info to stdout/stderr for Databricks Apps
-                        logger.info(
-                            f"Debug - Job Manager Available: {JOB_MANAGER_AVAILABLE}"
-                        )
-                        logger.info(
-                            f"Debug - Workspace Client Type: {type(st.session_state.workspace_client)}"
-                        )
-                        logger.info(
-                            f"Debug - Config Keys: {list(st.session_state.config.keys())}"
-                        )
-
-                    # Don't continue with the rest of the flow if job creation failed
-                    return
-
-                st.write(f"• ✅ Job created (ID: {job_id})")
-                st.write(f"• ✅ Job run started (Run ID: {run_id})")
-                logger.info(f"Successfully created job {job_id} with run {run_id}")
-                print(f"[JOB_CREATION] SUCCESS: Job {job_id}, Run {run_id}")
-
-                # Store job info in session
-                st.session_state.job_runs[run_id] = {
-                    "job_id": job_id,
-                    "job_name": job_name,
-                    "run_id": run_id,
-                    "tables": tables,
-                    "status": "PENDING",
-                    "start_time": datetime.now(),
-                    "mode": st.session_state.config.get("mode", "comment"),
-                    "cluster_size": cluster_size,
-                    "table_count": len(tables),
-                }
-
-                # Get initial status (following test_job_manager pattern)
-                st.write("• 📊 Getting initial job status...")
-                try:
-                    initial_status = job_manager.get_run_status(run_id)
-                    if initial_status:
-                        st.session_state.job_runs[run_id]["status"] = initial_status
-                        st.write(f"• 📊 Initial status: {initial_status}")
-                        print(f"[JOB_CREATION] Initial status: {initial_status}")
-
-                        # Show expected completion time
-                        if initial_status in ["PENDING", "RUNNING"]:
-                            st.write(
-                                "• ⏱️ Expected completion: 10-30 minutes (depending on table count)"
-                            )
-                    else:
-                        st.write(
-                            "• ⚠️ Could not get initial status - job may still be starting"
-                        )
-                        print("[JOB_CREATION] Could not get initial status")
-
-                except Exception as status_e:
-                    st.write(f"• ⚠️ Status check failed: {str(status_e)}")
-                    print(f"[JOB_CREATION] Status check exception: {str(status_e)}")
-
-                # Success message with guidance
-                st.success("✅ Job created and started successfully!")
-                st.info(
-                    "💡 **Next Steps**: The job is now running. You can monitor progress below or visit the Databricks workspace."
-                )
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**Job ID:** {job_id}")
-                    st.write(f"**Run ID:** {run_id}")
-                    st.write(f"**Tables:** {len(tables)}")
-                with col2:
-                    st.write(f"**Cluster:** {cluster_size}")
-                    st.write(
-                        f"**Mode:** {st.session_state.config.get('mode', 'comment')}"
-                    )
-                    if user_email:
-                        st.write(f"**Notifications:** {user_email}")
-
-                # Provide link to Databricks workspace
-                if st.session_state.config.get("host"):
-                    workspace_url = (
-                        f"{st.session_state.config['host']}#job/{job_id}/run/{run_id}"
-                    )
-                    st.markdown(f"🔗 [View Job in Databricks]({workspace_url})")
-
-                # Enable auto-monitoring with user feedback
-                st.session_state.auto_refresh = True
-                st.write(
-                    "• 🔄 Auto-monitoring enabled - status will update automatically"
-                )
-                st.write(
-                    "• 📊 Check the 'Job Status' section below for real-time updates"
-                )
-
-                # Small delay then refresh to show job status
-                time.sleep(1)
-                st.rerun()
-
-        # except Exception as e:
-        #     st.error(f"❌ Job creation failed: {str(e)}")
-        #     logger.error(f"Job creation failed: {str(e)}", exc_info=True)
-        #     print(f"[JOB_CREATION] EXCEPTION: {str(e)}")
-        #     print(f"[JOB_CREATION] Exception type: {type(e).__name__}")
-
-        #     # Detailed error information
-        #     with st.expander("🔍 Debug Information"):
-        #         st.write("**Error Details:**")
-        #         st.code(str(e))
-
-        #         # Show the full exception traceback
-        #         import traceback
-
-        #         st.write("**Full Traceback:**")
-        #         st.code(traceback.format_exc())
-        #         print(f"[JOB_CREATION] Full traceback:")
-        #         print(traceback.format_exc())
-
-        #         st.write("**System State:**")
-        #         st.write(
-        #             f"- Workspace client: {st.session_state.workspace_client is not None}"
-        #         )
-        #         st.write(f"- Tables count: {len(tables) if tables else 0}")
-        #         st.write(f"- Config loaded: {bool(st.session_state.config)}")
-
-        #         if st.session_state.config:
-        #             st.write(
-        #                 f"- Catalog: {st.session_state.config.get('catalog_name', 'Not set')}"
-        #             )
-        #             st.write(
-        #                 f"- Host: {st.session_state.config.get('host', 'Not set')}"
-        #             )
-        #             st.write(
-        #                 f"- Schema: {st.session_state.config.get('schema_name', 'Not set')}"
-        #             )
-
-        #         # Test workspace client connectivity
-        #         st.write("**Connectivity Test:**")
-        #         try:
-        #             if st.session_state.workspace_client:
-        #                 current_user = (
-        #                     st.session_state.workspace_client.current_user.me()
-        #                 )
-        #                 st.write(
-        #                     f"- ✅ Can access current user: {current_user.user_name}"
-        #                 )
-
-        #                 # Test job listing (to check permissions)
-        #                 jobs = list(
-        #                     st.session_state.workspace_client.jobs.list(limit=1)
-        #                 )
-        #                 st.write(f"- ✅ Can list jobs: Found {len(jobs)} job(s)")
-        #             else:
-        #                 st.write("- ❌ Workspace client is None")
-        #         except Exception as test_e:
-        #             st.write(f"- ❌ Connectivity test failed: {str(test_e)}")
-
-        #         st.write("**Troubleshooting:**")
-        #         st.markdown(
-        #             """
-        #         1. **Check workspace permissions** - Ensure you can create jobs
-        #         2. **Verify cluster permissions** - Check if you can create clusters
-        #         3. **Try smaller cluster size** - Some node types may not be available
-        #         4. **Check quota limits** - Your workspace may have resource limits
-        #         5. **Verify catalog access** - Ensure the catalog exists and you have access
-        #         6. **Check notebook path** - Verify `./notebooks/generate_metadata` exists
-        #         """
-        #         )
-
-        #    return
+        st.success(
+            "🎉 Job created and started! Check the 'Job Status' tab to monitor progress."
+        )
 
     def process_uploaded_csv(self, uploaded_file):
         """Process uploaded CSV file and return table list"""
@@ -2246,32 +2017,42 @@ class DBXMetaGenApp:
 
             # Create job configuration for sync_reviewed_ddl notebook
             job_config = JobSettings(
-                name=job_name,
-                tasks=[
-                    {
-                        "task_key": "sync_metadata",
-                        "notebook_task": NotebookTask(
-                            notebook_path="./notebooks/sync_reviewed_ddl",
-                            base_parameters=job_parameters,
-                        ),
-                        "job_cluster_key": "sync_cluster",
-                    }
-                ],
-                job_clusters=[
-                    JobCluster(
-                        job_cluster_key="sync_cluster",
-                        new_cluster=ClusterSpec(
-                            spark_version="16.4.x-cpu-ml-scala2.12",
-                            node_type_id="Standard_D3_v2",
-                            num_workers=1,  # Small cluster for metadata sync
-                            runtime_engine="STANDARD",
+                environments=[
+                    JobEnvironment(
+                        environment_key="default_python",
+                        spec=Environment(
+                            environment_version="1",
+                            # dependencies=["./requirements.txt"],
                         ),
                     )
                 ],
+                performance_target=PerformanceTarget.PERFORMANCE_OPTIMIZED,
+                name=job_name,
+                tasks=[
+                    Task(
+                        task_key="sync_metadata",
+                        notebook_task=NotebookTask(
+                            notebook_path="./notebooks/sync_reviewed_ddl",
+                            base_parameters=job_parameters,
+                        ),
+                        # "job_cluster_key": "sync_cluster",
+                    )
+                ],
+                # job_clusters=[
+                #     JobCluster(
+                #         job_cluster_key="sync_cluster",
+                #         new_cluster=ClusterSpec(
+                #             spark_version="16.4.x-cpu-ml-scala2.12",
+                #             node_type_id="Standard_D3_v2",
+                #             num_workers=1,  # Small cluster for metadata sync
+                #             runtime_engine="STANDARD",
+                #         ),
+                #     )
+                # ],
             )
 
             # Create the job
-            job = st.session_state.workspace_client.jobs.create(**job_config)
+            job = st.session_state.workspace_client.jobs.create(**job_config.as_dict())
 
             st.success(f"✅ Sync job created! Job ID: {job.job_id}")
             st.info(

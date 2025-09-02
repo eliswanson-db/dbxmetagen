@@ -61,6 +61,7 @@ class MetadataConfig:
             "spacy_model_names",
             "include_existing_table_comment",
             "column_with_reviewed_ddl",
+            "current_user",
         ],
     }
     MODEL_PARAMS = {}

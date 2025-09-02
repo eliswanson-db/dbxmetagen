@@ -10,3 +10,4 @@ spacy==3.8.7
 presidio_analyzer==2.2.358
 presidio_anonymizer==2.2.358
 requests>=2.25.0
+dspy-ai>=2.4.0

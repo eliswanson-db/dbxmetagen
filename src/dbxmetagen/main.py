@@ -9,9 +9,9 @@ from src.dbxmetagen.processing import (
     generate_and_persist_metadata,
     get_generated_metadata,
     get_generated_metadata_data_aware,
-    sanitize_email,
     get_control_table,
 )
+from src.dbxmetagen.user_utils import sanitize_user_identifier
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.deterministic_pi import ensure_spacy_model
 
@@ -58,7 +58,7 @@ def main(kwargs):
     print("Running generate on...", config.table_names)
     generate_and_persist_metadata(config)
     spark.sql(
-        f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_email(config.current_user)}"""
+        f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_user_identifier(config.current_user)}"""
     )
     control_table = get_control_table(config)
     spark.sql(

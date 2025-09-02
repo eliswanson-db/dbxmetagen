@@ -1,0 +1,69 @@
+resources:
+  jobs:
+    dspy_training_job:
+      name: dbxmetagen_dspy_training_${bundle.environment}
+      
+      job_clusters:
+        - job_cluster_key: dspy_training_cluster
+          new_cluster:
+            cluster_name: dbxmetagen-dspy-training-${bundle.environment}
+            spark_version: "15.4.x-cpu-ml-scala2.12"
+            node_type_id: i3.xlarge
+            driver_node_type_id: i3.xlarge
+            num_workers: 2
+            autoscale:
+              min_workers: 1
+              max_workers: 4
+            custom_tags:
+              Project: dbxmetagen
+              Environment: ${bundle.environment}
+              JobType: dspy_training
+
+      tasks:
+        - task_key: dspy_training_task
+          job_cluster_key: dspy_training_cluster
+          
+          notebook_task:
+            notebook_path: ../notebooks/dspy_training_quickstart.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: ${var.schema_name}
+              environment: ${bundle.environment}
+              model: ${var.model}
+              chat_completion_type: ${var.chat_completion_type}
+              custom_endpoint_url: ${var.custom_endpoint_url}
+              custom_endpoint_secret_scope: ${var.custom_endpoint_secret_scope}
+              custom_endpoint_secret_key: ${var.custom_endpoint_secret_key}
+              max_tokens: "2000"
+              temperature: "0.3"
+              training_sample_size: "5"  # Number of tables to use for training
+
+          timeout_seconds: 3600  # 1 hour timeout for training
+          max_retries: 1
+          min_retry_interval_millis: 10000
+          retry_on_timeout: false
+
+      # Schedule daily but paused - user can enable when needed
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+        timezone_id: "UTC"
+        pause_status: PAUSED
+      
+      # Email notifications for training completion
+      email_notifications:
+        on_failure:
+          - ${var.current_user}
+
+      tags:
+        project: dbxmetagen
+        environment: ${bundle.environment}
+        job_type: dspy_training
+        created_by: databricks_asset_bundle
+
+      parameters:
+        - name: training_tables
+          default: ""
+        - name: use_real_data
+          default: "false"
+        - name: num_optimization_steps
+          default: "20"

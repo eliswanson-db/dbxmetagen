@@ -3,12 +3,17 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from databricks.sdk.service.jobs import (
+    PerformanceTarget,
     Task,
     NotebookTask,
     JobEmailNotifications,
     JobCluster,
+    JobEnvironment,
+    # EnvironmentSpec,
+    # Environment,
+    PerformanceTarget,
 )
-from databricks.sdk.service.compute import ClusterSpec, RuntimeEngine
+from databricks.sdk.service.compute import ClusterSpec, RuntimeEngine, Environment
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -49,13 +54,12 @@ class DBXMetaGenJobManager:
         self.workspace_client = workspace_client
 
     def _resolve_notebook_path(self, config: Dict[str, Any]) -> str:
-        """Determine the workspace notebook path to run based on env/config.
+        """Simple notebook path resolution for Databricks apps.
 
-        Precedence:
-        1) Explicit override via NOTEBOOK_PATH env or config['notebook_path']
-        2) Use configured deploy user (config['owner_user'] or DEPLOY_USER_NAME env)
-        3) If APP_ENV == 'dev' and a human user can be inferred from current_user, use that
-        4) Fallback to Shared path
+        For apps, we use a simpler approach:
+        1. Check for explicit override
+        2. Use bundle-based path with current user
+        3. Fallback to shared path
         """
         # 1) Explicit override
         explicit_path = os.environ.get("NOTEBOOK_PATH") or config.get("notebook_path")
@@ -65,70 +69,58 @@ class DBXMetaGenJobManager:
             )
             return explicit_path
 
-        # Determine bundle target and app env
-        bundle_target = config.get("bundle_target") or os.environ.get(
-            "BUNDLE_TARGET", "dev"
-        )
-        app_env = (os.environ.get("APP_ENV", "dev") or "dev").lower()
+        # 2) If using user impersonation, try current workspace user first
+        try:
+            current_user = self.workspace_client.current_user.me()
+            user_name = current_user.user_name
 
-        # Helper: detect if a string looks like a service principal GUID (avoid using as user folder)
-        def _looks_like_sp_guid(value: Optional[str]) -> bool:
-            if not value:
-                return False
-            v = value.strip().lower()
-            # basic GUID heuristic; also exclude emails (contain @)
-            return (
-                "@" not in v
-                and len(v) == 36
-                and all(c in "0123456789abcdef-" for c in v)
-                and v.count("-") == 4
-            )
+            # Check if this looks like a real user email (not service principal GUID)
+            if "@" in user_name and not user_name.startswith("034f50f1"):
+                bundle_target = config.get("bundle_target", "dev")
+                # Note: keeping same path format as comment suggests
+                path = f"/Workspace/Users/{user_name}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
+                debug_log_job_manager(
+                    f"Resolved notebook path for impersonated user {user_name}: {path}"
+                )
+                return path
+            else:
+                debug_log_job_manager(
+                    f"Current user appears to be service principal: {user_name}"
+                )
 
-        # 2) Prefer configured deploy user (owner_user variable or DEPLOY_USER_NAME env)
-        configured_owner = (config.get("owner_user") or "").strip()
-        if (
-            configured_owner
-            and "${" not in configured_owner
-            and "@" in configured_owner
-        ):
-            path = f"/Workspace/Users/{configured_owner}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata.py"
-            debug_log_job_manager(f"Resolved notebook path from owner_user: {path}")
-            return path
+        except Exception as e:
+            debug_log_job_manager(f"Could not resolve current user path: {e}")
 
-        deploy_user = os.environ.get("DEPLOY_USER_NAME", "").strip()
-        if deploy_user and "@" in deploy_user:
-            path = f"/Workspace/Users/{deploy_user}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata.py"
-            debug_log_job_manager(
-                f"Resolved notebook path from DEPLOY_USER_NAME: {path}"
-            )
-            return path
+        # 3) Use bundle deploying user (not app service principal)
+        try:
+            # Get the actual human user who deployed the bundle, not the app's service principal
+            bundle_deploying_user = config.get(
+                "current_user"
+            )  # This comes from variables.yml
+            if bundle_deploying_user and "@" in bundle_deploying_user:
+                user_name = bundle_deploying_user
+                bundle_target = config.get("bundle_target", "dev")
 
-        # 3) In dev, attempt to use current_user if it looks like a human email
-        if app_env == "dev":
-            try:
-                current_user = self.workspace_client.current_user.me()
-                candidate = (getattr(current_user, "user_name", "") or "").strip()
-                if (
-                    candidate
-                    and not _looks_like_sp_guid(candidate)
-                    and "@" in candidate
-                ):
-                    path = f"/Workspace/Users/{candidate}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
-                    debug_log_job_manager(
-                        f"Resolved dev notebook path from current_user: {path}"
-                    )
-                    return path
-                else:
-                    debug_log_job_manager(
-                        f"Current user does not look like a human email ('{candidate}'), avoiding SP home"
-                    )
-            except Exception as e:
-                debug_log_job_manager(f"Failed to get current user for dev path: {e}")
+                path = f"/Workspace/Users/{user_name}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"  # Note: don't change this back to generate_metadata.py, it will break the app.
+                debug_log_job_manager(
+                    f"Resolved notebook path for bundle deploying user {user_name}: {path}"
+                )
+                return path
+            else:
+                debug_log_job_manager(
+                    f"Bundle deploying user not found or invalid: {bundle_deploying_user}"
+                )
 
-        # 4) Fallback to Shared path (ensure files are deployed there if you use this)
-        shared_base = os.environ.get("SHARED_WORKSPACE_BASE", "/Workspace/Shared")
-        path = f"{shared_base}/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
-        debug_log_job_manager(f"Resolved fallback (Shared) notebook path: {path}")
+        except Exception as e:
+            debug_log_job_manager(f"Could not resolve bundle user path: {e}")
+
+        # 4) Fallback: Use explicit path based on known deployment pattern
+        bundle_target = config.get("bundle_target", "dev")
+
+        # For dev target, use the actual deploying user's path (hardcoded for now)
+        # TODO: Make this dynamic once path resolution is working
+        path = f"/Workspace/Users/eli.swanson@databricks.com/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
+        debug_log_job_manager(f"Using explicit dev path: {path}")
         return path
 
     def create_metadata_job(
@@ -260,42 +252,158 @@ class DBXMetaGenJobManager:
 
             # Create job using the official SDK pattern (matching documentation examples)
             print(f"[JOB_MGR] Creating job in Databricks...")
+            print(f"[JOB_MGR] DEBUG - Notebook path: {notebook_path}")
+            print(f"[JOB_MGR] DEBUG - Job parameters count: {len(job_parameters)}")
+            print(
+                f"[JOB_MGR] DEBUG - Tables parameter: {job_parameters.get('table_names', 'NOT_SET')}"
+            )
+
+            # Validate critical parameters before job creation
+            if not notebook_path:
+                raise ValueError("Notebook path is empty - cannot create job")
+            if not job_parameters.get("table_names"):
+                raise ValueError("No table names provided - cannot create job")
+
+            # Try to find an existing cluster first
+            existing_cluster_id = None
             try:
-                job = self.workspace_client.jobs.create(
-                    name=job_name,
-                    job_clusters=[
-                        JobCluster(
-                            job_cluster_key="metadata_cluster",
-                            new_cluster=ClusterSpec(
-                                spark_version="14.3.x-cpu-ml-scala2.12",
-                                node_type_id=node_type,
-                                num_workers=workers["min"],
-                                runtime_engine=RuntimeEngine.STANDARD,
-                            ),
+                clusters = self.workspace_client.clusters.list()
+                for cluster in clusters:
+                    if (
+                        cluster.state
+                        and cluster.state.value in ["RUNNING", "TERMINATED"]
+                        and hasattr(cluster, "cluster_name")
+                        and "shared" in cluster.cluster_name.lower()
+                    ):
+                        existing_cluster_id = cluster.cluster_id
+                        print(
+                            f"[JOB_MGR] Found existing cluster: {cluster.cluster_name} ({cluster.cluster_id})"
                         )
-                    ],
-                    tasks=[
-                        Task(
-                            description="Generate metadata for tables",
-                            task_key="generate_metadata",
-                            notebook_task=NotebookTask(
-                                notebook_path=notebook_path,
-                                base_parameters=job_parameters,
-                            ),
-                            job_cluster_key="metadata_cluster",
-                            timeout_seconds=14400,
-                        )
-                    ],
-                    email_notifications=(
-                        JobEmailNotifications(
-                            on_failure=[user_email] if user_email else [],
-                            on_success=[user_email] if user_email else [],
-                        )
-                        if user_email
-                        else None
-                    ),
-                    max_concurrent_runs=1,
+                        break
+            except Exception as cluster_e:
+                print(f"[JOB_MGR] Could not list clusters: {cluster_e}")
+
+            try:
+                if existing_cluster_id:
+                    # Use existing cluster - no cluster creation needed!
+                    print(f"[JOB_MGR] Using existing cluster: {existing_cluster_id}")
+                    job = self.workspace_client.jobs.create(
+                        environments=[
+                            JobEnvironment(
+                                environment_key="default_python",
+                                spec=Environment(
+                                    environment_version="2",
+                                    # dependencies=["./requirements.txt"],
+                                ),
+                            )
+                        ],
+                        performance_target=PerformanceTarget.PERFORMANCE_OPTIMIZED,
+                        name=job_name,
+                        tasks=[
+                            Task(
+                                description="Generate metadata for tables",
+                                task_key="generate_metadata",
+                                notebook_task=NotebookTask(
+                                    notebook_path=notebook_path,
+                                    base_parameters=job_parameters,
+                                ),
+                                existing_cluster_id=existing_cluster_id,
+                                timeout_seconds=14400,
+                            )
+                        ],
+                        email_notifications=(
+                            JobEmailNotifications(
+                                on_failure=[user_email] if user_email else [],
+                                on_success=[user_email] if user_email else [],
+                            )
+                            if user_email
+                            else None
+                        ),
+                        max_concurrent_runs=1,
+                    )
+                else:
+                    # Fallback: Create job cluster (requires cluster creation permissions)
+                    print(
+                        f"[JOB_MGR] No existing cluster found, creating new job cluster"
+                    )
+                    job = self.workspace_client.jobs.create(
+                        environments=[
+                            JobEnvironment(
+                                environment_key="default_python",
+                                spec=Environment(
+                                    environment_version="2",
+                                    # dependencies=["./requirements.txt"],
+                                ),
+                            )
+                        ],
+                        performance_target=PerformanceTarget.PERFORMANCE_OPTIMIZED,
+                        name=job_name,
+                        tasks=[
+                            Task(
+                                description="Generate metadata for tables",
+                                task_key="generate_metadata",
+                                notebook_task=NotebookTask(
+                                    notebook_path=notebook_path,
+                                    base_parameters=job_parameters,
+                                ),
+                                existing_cluster_id=existing_cluster_id,
+                                timeout_seconds=14400,
+                            )
+                        ],
+                        email_notifications=(
+                            JobEmailNotifications(
+                                on_failure=[user_email] if user_email else [],
+                                on_success=[user_email] if user_email else [],
+                            )
+                            if user_email
+                            else None
+                        ),
+                        max_concurrent_runs=1,
+                    )
+                    # job = self.workspace_client.jobs.create(
+                    #     name=job_name,
+                    #     job_clusters=[
+                    #         JobCluster(
+                    #             job_cluster_key="metadata_cluster",
+                    #             new_cluster=ClusterSpec(
+                    #                 spark_version="14.3.x-cpu-ml-scala2.12",
+                    #                 node_type_id=node_type,
+                    #                 num_workers=workers["min"],
+                    #                 runtime_engine=RuntimeEngine.STANDARD,
+                    #             ),
+                    #         )
+                    #     ],
+                    #     tasks=[
+                    #         Task(
+                    #             description="Generate metadata for tables",
+                    #             task_key="generate_metadata",
+                    #             notebook_task=NotebookTask(
+                    #                 notebook_path=notebook_path,
+                    #                 base_parameters=job_parameters,
+                    #             ),
+                    #             job_cluster_key="metadata_cluster",
+                    #             timeout_seconds=14400,
+                    #         )
+                    #     ],
+                    #     email_notifications=(
+                    #         JobEmailNotifications(
+                    #             on_failure=[user_email] if user_email else [],
+                    #             on_success=[user_email] if user_email else [],
+                    #         )
+                    #         if user_email
+                    #         else None
+                    #     ),
+                    #     max_concurrent_runs=1,
+                    # )
+                # print(f"[JOB_MGR] ✅ Job created successfully - ID: {job.job_id}")
+
+                # Fetch the full job details to verify tasks
+                created_job = self.workspace_client.jobs.get(job.job_id)
+                task_count = (
+                    len(created_job.settings.tasks) if created_job.settings.tasks else 0
                 )
+                print(f"[JOB_MGR] ✅ Job has {task_count} tasks")
+
                 logger.info(f"Job created successfully with ID: {job.job_id}")
                 print(f"[JOB_MGR] Job created successfully with ID: {job.job_id}")
             except Exception as create_e:
