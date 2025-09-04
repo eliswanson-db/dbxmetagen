@@ -4,6 +4,30 @@
 
 This document provides a comprehensive guide to **dbxmetagen**, integrating all information from the original README and expanding it with details from the `variables.yml` configuration. Every option, workflow, and advanced usage pattern is included to ensure full transparency and control for users.
 
+```mermaid
+graph LR
+    A["🚀 Process<br/>Tables"] --> B["📊 Extract Schema<br/>& Sample Data"]
+    
+    B --> C["📝 Create Prompts<br/>(Comment/PII)"]
+    
+    C --> D["🤖 LLM Call<br/>(Foundational Model Endpoints)"]
+    
+    D --> E["🔄 Process Response<br/>(Parse & Validate)"]
+    
+    E --> F["🛠️ Generate DDL<br/>(ALTER TABLE statements)"]
+    
+    F --> G["💾 Apply<br/>to Tables"]
+    
+    %% Style for slide presentation
+    classDef main fill:#e3f2fd,stroke:#1976d2,stroke-width:3px,font-size:14px
+    classDef llm fill:#fff3e0,stroke:#f57c00,stroke-width:3px,font-size:14px
+    classDef output fill:#e8f5e8,stroke:#388e3c,stroke-width:3px,font-size:14px
+    
+    class A,B,C,E main
+    class D llm
+    class F,G output
+```
+
 ## Table of Contents
 
 - [Project Overview](#project-overview)
@@ -98,11 +122,6 @@ Both primary entry points for this application are Databricks notebooks.
 
 <br/>
 <br/>
-
-## Minimal Setup
-
-<<<<<<< HEAD
-Strongly recommend reviewing all the options before using, there are a variety of useful options.
 
 ### Minimal Setup
 1. Clone the repo into Databricks to a Git Folder.

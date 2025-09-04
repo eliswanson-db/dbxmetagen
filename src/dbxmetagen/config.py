@@ -93,6 +93,20 @@ class MetadataConfig:
             self.filter_data_from_metadata = True
             self.include_possible_data_fields_in_metadata = False
 
+    def get_temp_metadata_log_table_name(self) -> str:
+        """
+        Generate unique temp metadata generation log table name for this job run.
+        Ensures concurrent jobs don't interfere with each other's temp tables.
+
+        Returns:
+            str: Full table name in format: catalog.schema.mode_temp_metadata_generation_log_user_timestamp
+        """
+        from .user_utils import sanitize_user_identifier, get_current_user
+
+        current_user = sanitize_user_identifier(get_current_user())
+        table_name = f"{self.catalog_name}.{self.schema_name}.{self.mode}_temp_metadata_generation_log_{current_user}_{self.log_timestamp}"
+        return table_name
+
     def load_yaml(self):
         with open(self.yaml_file_path, "r") as file:
             variables = yaml.safe_load(file)

@@ -57,10 +57,22 @@ def main(kwargs):
         upsert_table_names_to_control_table(config.table_names, config)
     print("Running generate on...", config.table_names)
     generate_and_persist_metadata(config)
-    spark.sql(
-        f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{sanitize_user_identifier(config.current_user)}"""
-    )
+    # Get the unique temp table name for this specific job run
+    temp_table = config.get_temp_metadata_log_table_name()
     control_table = get_control_table(config)
-    spark.sql(
-        f"""DROP TABLE IF EXISTS {config.catalog_name}.{config.schema_name}.{control_table}"""
-    )
+    control_table_full = f"{config.catalog_name}.{config.schema_name}.{control_table}"
+
+    # Clean up this job's unique temp table using DROP (safe since each job has its own table)
+    try:
+        spark.sql(f"""DROP TABLE IF EXISTS {temp_table}""")
+        print(f"Cleaned up temp table: {temp_table}")
+    except Exception as e:
+        print(f"Temp table cleanup failed: {e}")
+
+    # For control table, use DELETE FROM since multiple jobs might share it (depending on config)
+    try:
+        spark.sql(f"""DELETE FROM {control_table_full}""")
+        print(f"Cleaned up control table: {control_table_full}")
+    except Exception as e:
+        # If table doesn't exist, that's fine - it means cleanup already happened
+        print(f"Control table cleanup skipped (table may not exist): {e}")

@@ -1,115 +1,115 @@
-resources:
-  jobs:
-    generate_test_data_job:
-      name: dbxmetagen_generate_test_data_${bundle.environment}
+# resources:
+#   jobs:
+#     generate_test_data_job:
+#       name: dbxmetagen_generate_test_data_${bundle.environment}
       
-      job_clusters:
-        - job_cluster_key: test_data_cluster
-          new_cluster:
-            cluster_name: dbxmetagen-test-data-${bundle.environment}
-            spark_version: "15.4.x-scala2.12"
-            runtime_engine: PHOTON
-            node_type_id: i3.large
-            driver_node_type_id: i3.large
-            num_workers: 2
-            autoscale:
-              min_workers: 1
-              max_workers: 3
-            spark_conf:
-              "spark.sql.adaptive.enabled": "true"
-              "spark.sql.adaptive.coalescePartitions.enabled": "true"
-              "spark.databricks.delta.optimizeWrite.enabled": "true"
-              "spark.databricks.delta.autoCompact.enabled": "true"
-            custom_tags:
-              Project: dbxmetagen
-              Environment: ${bundle.environment}
-              JobType: test_data_generation
+#       job_clusters:
+#         - job_cluster_key: test_data_cluster
+#           new_cluster:
+#             cluster_name: dbxmetagen-test-data-${bundle.environment}
+#             spark_version: "15.4.x-scala2.12"
+#             runtime_engine: PHOTON
+#             node_type_id: i3.large
+#             driver_node_type_id: i3.large
+#             num_workers: 2
+#             autoscale:
+#               min_workers: 1
+#               max_workers: 3
+#             spark_conf:
+#               "spark.sql.adaptive.enabled": "true"
+#               "spark.sql.adaptive.coalescePartitions.enabled": "true"
+#               "spark.databricks.delta.optimizeWrite.enabled": "true"
+#               "spark.databricks.delta.autoCompact.enabled": "true"
+#             custom_tags:
+#               Project: dbxmetagen
+#               Environment: ${bundle.environment}
+#               JobType: test_data_generation
 
-      tasks:
-        - task_key: check_create_test_data_flag
-          job_cluster_key: test_data_cluster
+#       tasks:
+#         - task_key: check_create_test_data_flag
+#           job_cluster_key: test_data_cluster
           
-          # Check if --create-test-data flag was provided during deployment
-          sql_task:
-            query: |
-              SELECT CASE 
-                WHEN '${var.create_test_data}' = 'true' THEN 'proceed'
-                ELSE 'skip'
-              END as action_required
-            warehouse_id: ${var.sql_warehouse_id}
+#           # Check if --create-test-data flag was provided during deployment
+#           sql_task:
+#             query: |
+#               SELECT CASE 
+#                 WHEN '${var.create_test_data}' = 'true' THEN 'proceed'
+#                 ELSE 'skip'
+#               END as action_required
+#             warehouse_id: ${var.sql_warehouse_id}
           
-          timeout_seconds: 60
+#           timeout_seconds: 60
           
-        - task_key: generate_life_sciences_data
-          job_cluster_key: test_data_cluster
-          depends_on:
-            - task_key: check_create_test_data_flag
-              outcome: SUCCESS
+#         - task_key: generate_life_sciences_data
+#           job_cluster_key: test_data_cluster
+#           depends_on:
+#             - task_key: check_create_test_data_flag
+#               outcome: SUCCESS
           
-          # Only run if the flag check passes
-          condition_task:
-            left: ${tasks.check_create_test_data_flag.values.action_required}
-            op: EQUAL_TO
-            right: proceed
+#           # Only run if the flag check passes
+#           condition_task:
+#             left: ${tasks.check_create_test_data_flag.values.action_required}
+#             op: EQUAL_TO
+#             right: proceed
           
-          notebook_task:
-            notebook_path: ../notebooks/utilities/generate_life_sciences_data.py
-            base_parameters:
-              environment: ${bundle.environment}
-              catalog_name: ${var.catalog_name}
-              schema_name: ${var.schema_name}_demo
-              num_records: "1000"
-              include_sample_data: "true"
+#           notebook_task:
+#             notebook_path: ../notebooks/utilities/generate_life_sciences_data.py
+#             base_parameters:
+#               environment: ${bundle.environment}
+#               catalog_name: ${var.catalog_name}
+#               schema_name: ${var.schema_name}_demo
+#               num_records: "1000"
+#               include_sample_data: "true"
 
-          timeout_seconds: 1800  # 30 minutes timeout
-          max_retries: 2
-          min_retry_interval_millis: 30000
-          retry_on_timeout: true
+#           timeout_seconds: 1800  # 30 minutes timeout
+#           max_retries: 2
+#           min_retry_interval_millis: 30000
+#           retry_on_timeout: true
 
-        - task_key: grant_permissions
-          job_cluster_key: test_data_cluster
-          depends_on:
-            - task_key: generate_life_sciences_data
-              outcome: SUCCESS
+#         - task_key: grant_permissions
+#           job_cluster_key: test_data_cluster
+#           depends_on:
+#             - task_key: generate_life_sciences_data
+#               outcome: SUCCESS
           
-          sql_task:
-            query: |
-              -- Grant permissions to app service principal
-              GRANT SELECT, MODIFY ON SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.app_service_principal_application_id}`;
+#           sql_task:
+#             query: |
+#               -- Grant permissions to app service principal
+#               GRANT SELECT, MODIFY ON SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.app_service_principal_application_id}`;
               
-              -- Grant permissions to deploying user  
-              GRANT SELECT, MODIFY ON SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.current_user}`;
+#               -- Grant permissions to deploying user  
+#               GRANT SELECT, MODIFY ON SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.current_user}`;
               
-              -- Grant permissions on all tables in the demo schema
-              GRANT SELECT, MODIFY ON ALL TABLES IN SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.app_service_principal_application_id}`;
-              GRANT SELECT, MODIFY ON ALL TABLES IN SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.current_user}`;
+#               -- Grant permissions on all tables in the demo schema
+#               GRANT SELECT, MODIFY ON ALL TABLES IN SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.app_service_principal_application_id}`;
+#               GRANT SELECT, MODIFY ON ALL TABLES IN SCHEMA ${var.catalog_name}.${var.schema_name}_demo TO `${var.current_user}`;
               
-              -- Grant permissions on future tables
-              ALTER SCHEMA ${var.catalog_name}.${var.schema_name}_demo SET DBPROPERTIES (
-                'delta.autoOptimize.optimizeWrite' = 'true',
-                'delta.autoOptimize.autoCompact' = 'true'
-              );
-            warehouse_id: ${var.sql_warehouse_id}
+#               -- Grant permissions on future tables
+#               ALTER SCHEMA ${var.catalog_name}.${var.schema_name}_demo SET DBPROPERTIES (
+#                 'delta.autoOptimize.optimizeWrite' = 'true',
+#                 'delta.autoOptimize.autoCompact' = 'true'
+#               );
+#             warehouse_id: ${var.sql_warehouse_id}
 
-          timeout_seconds: 300
-          max_retries: 3
+#           timeout_seconds: 300
+#           max_retries: 3
 
-      # This job should run at startup only if --create-test-data flag is provided
-      # No automatic trigger - controlled by the condition task based on create_test_data variable
+#       # This job should run at startup only if --create-test-data flag is provided
+#       # No automatic trigger - controlled by the condition task based on create_test_data variable
       
-      # Email notifications
-      email_notifications:
-        on_failure:
-          - ${var.current_user}
+#       # Email notifications
+#       email_notifications:
+#         on_failure:
+#           - ${var.current_user}
 
-      tags:
-        project: dbxmetagen
-        environment: ${bundle.environment}
-        job_type: test_data_generation
-        created_by: databricks_asset_bundle
+#       tags:
+#         project: dbxmetagen
+#         environment: ${bundle.environment}
+#         job_type: test_data_generation
+#         created_by: databricks_asset_bundle
 
-      parameters:
-        - name: force_recreate
-          default: "false"
-        - name: additional_schemas
-          default: ""
+#       parameters:
+#         - name: force_recreate
+#           default: "false"
+#         - name: additional_schemas
+#           default: ""

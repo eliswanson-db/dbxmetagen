@@ -94,9 +94,13 @@ class DBXMetaGenJobManager:
         # 3) Use bundle deploying user (not app service principal)
         try:
             # Get the actual human user who deployed the bundle, not the app's service principal
-            bundle_deploying_user = config.get(
-                "current_user"
-            )  # This comes from variables.yml
+            # I tried this 1
+            bundle_deploying_user = self.workspace_client.current_user.me()
+            print(bundle_deploying_user)
+            # logging.info("bundle_deploying_user: %s", bundle_deploying_user)
+            # bundle_deploying_user = config.get(
+            #     "current_user"
+            # )  # This comes from variables.yml
             if bundle_deploying_user and "@" in bundle_deploying_user:
                 user_name = bundle_deploying_user
                 bundle_target = config.get("bundle_target", "dev")

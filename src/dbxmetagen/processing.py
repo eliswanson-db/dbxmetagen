@@ -727,7 +727,9 @@ def get_control_table(config: MetadataConfig) -> str:
         str: The control table name.
     """
     spark = SparkSession.builder.getOrCreate()
-    if config.job_id and config.cleanup_control_table == "true":
+    if config.job_id and (
+        config.cleanup_control_table == "true" or config.cleanup_control_table == True
+    ):
         formatted_control_table = config.control_table.format(
             sanitize_user_identifier(get_current_user())
         ) + str(config.job_id)
@@ -848,8 +850,8 @@ def _export_table_to_tsv(df, config):
 
         filename = f"review_metadata_{config.mode}_{config.log_timestamp}.tsv"
         local_path = f"/local_disk0/tmp/{filename}"
-        current_user = sanitize_user_identifier(get_current_user())
-        table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
+        # Use unique temp table name for concurrent job safety
+        table_name = config.get_temp_metadata_log_table_name()
         volume_path = (
             f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
         )
@@ -959,8 +961,8 @@ def _export_table_to_excel(df: Any, config: Any) -> str:
     timestamp = config.log_timestamp
 
     try:
-        current_user = sanitize_user_identifier(get_current_user())
-        table_name = f"{config.catalog_name}.{config.schema_name}.{config.mode}_temp_metadata_generation_log_{current_user}"
+        # Use unique temp table name for concurrent job safety
+        table_name = config.get_temp_metadata_log_table_name()
         volume_path = (
             f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
         )

@@ -1,0 +1,2 @@
+# Dspy dependencies
+dspy-ai>=2.4.0

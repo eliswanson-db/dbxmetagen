@@ -69,6 +69,9 @@ variables:
   job_table_names:
     description: default table names - get applied if there are no host overrides.
     default: default.simple_test
+  create_test_data:
+    description: Flag to create test data during deployment. Set via --create-test-data flag in deploy_app.sh
+    default: false
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
     default: true
