@@ -62,7 +62,7 @@ class DBXMetaGenJobManager:
         3. Fallback to shared path
         """
         # 1) Explicit override
-        explicit_path = os.environ.get("NOTEBOOK_PATH") or config.get("notebook_path")
+        explicit_path = os.environ.get("NOTEBOOK_PATH") or config.get("notebook_path") # TODO: Where is config coming from?
         if explicit_path:
             debug_log_job_manager(
                 f"Using explicit NOTEBOOK_PATH override: {explicit_path}"
@@ -75,10 +75,10 @@ class DBXMetaGenJobManager:
             user_name = current_user.user_name
 
             # Check if this looks like a real user email (not service principal GUID)
-            if "@" in user_name and not user_name.startswith("034f50f1"):
+            if "@" in user_name:
                 bundle_target = config.get("bundle_target", "dev")
                 # Note: keeping same path format as comment suggests
-                path = f"/Workspace/Users/{user_name}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
+                path = f"/Workspace/Users/{user_name}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata" # TODO: Fix this
                 debug_log_job_manager(
                     f"Resolved notebook path for impersonated user {user_name}: {path}"
                 )
@@ -136,11 +136,6 @@ class DBXMetaGenJobManager:
         user_email: Optional[str] = None,
     ) -> tuple[int, int]:
         """Create and run a metadata generation job"""
-
-        print(f"[JOB_MGR] create_metadata_job called with job_name={job_name}")
-        print(f"[JOB_MGR] Tables count: {len(tables)}")
-        print(f"[JOB_MGR] Cluster size: {cluster_size}")
-        print(f"[JOB_MGR] Config keys: {list(config.keys())}")
 
         logger.debug(f"Creating metadata job: {job_name}")
         logger.debug(f"Tables: {len(tables)} tables")
