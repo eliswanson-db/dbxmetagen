@@ -666,7 +666,7 @@ class GLiNERNERModel(mlflow.pyfunc.PythonModel):
                 "🔒 SECURITY: Using community model. Verify compliance requirements."
             )
 
-        self.model = GLiNER.from_pretrained(
+            self.model = GLiNER.from_pretrained(
                 self.config["model_name"],
                 cache_dir=cache_dir,
                 force_download=False,  # Use cached version when available
@@ -677,7 +677,7 @@ class GLiNERNERModel(mlflow.pyfunc.PythonModel):
 
             # Initialize Presidio analyzer (Microsoft-backed, more secure)
             logger.info("Initializing Presidio analyzer...")
-        self.analyzer = AnalyzerEngine()
+            self.analyzer = AnalyzerEngine()
 
             # Warm up models with safe test input
             logger.info("Warming up models with safe test data...")
@@ -952,7 +952,7 @@ def create_ner_udf(model_uri_path: str):
             print(
                 f"🔄 Loading model for worker: {model_uri_path}"
             )  # Console output for debugging
-        model = mlflow.pyfunc.load_model(model_uri_path)
+            model = mlflow.pyfunc.load_model(model_uri_path)
             logger.info("✅ Model loaded successfully on worker")
             print("✅ Model loaded successfully on worker")
 
@@ -992,9 +992,9 @@ def create_ner_udf(model_uri_path: str):
 
             try:
                 # Prepare input with consistent format
-            input_df = pd.DataFrame(
-                {
-                    "text": text_series.values,
+                input_df = pd.DataFrame(
+                    {
+                        "text": text_series.values,
                         "text_type": ["general"] * current_batch_size,
                     }
                 )
@@ -1006,12 +1006,12 @@ def create_ner_udf(model_uri_path: str):
                 print(
                     f"📊 Processing batch {batch_count} with {current_batch_size} texts"
                 )
-            results = model.predict(input_df)
+                results = model.predict(input_df)
                 print(f"✅ Batch {batch_count} prediction complete")
 
                 # Ensure results have correct structure
-            yield pd.DataFrame(
-                {
+                yield pd.DataFrame(
+                    {
                         "entities": results["entities"].values,
                         "redacted_text": results["redacted_text"].values,
                         "entity_count": results["entity_count"].values,
@@ -1034,37 +1034,47 @@ def create_ner_udf(model_uri_path: str):
             "Worker completed processing %d batches with %d total texts",
             batch_count,
             total_texts,
-            )
+        )
 
     return process_text_batch
 
 
 # SYSTEMATIC DIAGNOSIS - Test each potential failure point
 
+
 def test_step_1_basic_udf():
     """Step 1: Test basic UDF functionality without any dependencies."""
+
     @pandas_udf("string")
     def basic_udf(text_series: pd.Series) -> pd.Series:
-        return pd.Series([f"✅ Basic UDF works! Processed {len(text_series)} texts"] * len(text_series))
+        return pd.Series(
+            [f"✅ Basic UDF works! Processed {len(text_series)} texts"]
+            * len(text_series)
+        )
+
     return basic_udf
 
 
 def test_step_2_imports():
     """Step 2: Test if all required libraries are available on workers."""
+
     @pandas_udf("string")
     def imports_udf(text_series: pd.Series) -> pd.Series:
         try:
             import torch, transformers, gliner, mlflow
+
             msg = f"✅ All imports OK! torch={torch.__version__}, transformers={transformers.__version__}"
             return pd.Series([msg] * len(text_series))
         except Exception as e:
             return pd.Series([f"❌ Import failed: {str(e)}"] * len(text_series))
+
     return imports_udf
 
 
 def test_step_3_model_loading(model_uri: str):
     """Step 3: Test ONLY MLflow model loading (likely culprit for hanging)."""
-    @pandas_udf("string") 
+
+    @pandas_udf("string")
     def model_load_udf(text_series: pd.Series) -> pd.Series:
         try:
             print(f"🔍 Attempting to load model: {model_uri}")
@@ -1075,47 +1085,51 @@ def test_step_3_model_loading(model_uri: str):
             error_msg = f"❌ Model load failed: {str(e)}"
             print(error_msg)
             return pd.Series([error_msg] * len(text_series))
+
     return model_load_udf
 
 
 def create_fixed_simple_udf(model_uri_path: str):
     """FIXED VERSION: Simple Series->DataFrame UDF (no iterator complexity)."""
-    
+
     @pandas_udf("struct<entities:string,redacted_text:string,entity_count:int>")
     def fixed_ner_udf(text_series: pd.Series) -> pd.DataFrame:
         batch_size = len(text_series)
-        
+
         try:
             # Load model - this will show us exactly where it hangs
             print(f"📥 [WORKER] Loading model: {model_uri_path}")
             model = mlflow.pyfunc.load_model(model_uri_path)
             print(f"✅ [WORKER] Model loaded successfully")
-            
+
             # Process batch
-            input_df = pd.DataFrame({
-                "text": text_series.values,
-                "text_type": ["general"] * batch_size
-            })
-            
+            input_df = pd.DataFrame(
+                {"text": text_series.values, "text_type": ["general"] * batch_size}
+            )
+
             print(f"🔄 [WORKER] Processing {batch_size} texts...")
             results = model.predict(input_df)
             print(f"✅ [WORKER] Processing complete")
-            
-            return pd.DataFrame({
-                "entities": results["entities"],
-                "redacted_text": results["redacted_text"], 
-                "entity_count": results["entity_count"]
-            })
-            
+
+            return pd.DataFrame(
+                {
+                    "entities": results["entities"],
+                    "redacted_text": results["redacted_text"],
+                    "entity_count": results["entity_count"],
+                }
+            )
+
         except Exception as e:
             error_msg = f"UDF_ERROR: {str(e)}"
             print(f"❌ [WORKER] {error_msg}")
-            return pd.DataFrame({
-                "entities": ["[]"] * batch_size,
-                "redacted_text": [error_msg] * batch_size,
-                "entity_count": [0] * batch_size
-            })
-    
+            return pd.DataFrame(
+                {
+                    "entities": ["[]"] * batch_size,
+                    "redacted_text": [error_msg] * batch_size,
+                    "entity_count": [0] * batch_size,
+                }
+            )
+
     return fixed_ner_udf
 
 
@@ -1145,65 +1159,79 @@ def run_systematic_diagnosis(test_df: DataFrame, model_uri: str):
     """Run systematic diagnosis to find exact failure point."""
     print("🔍 SYSTEMATIC DIAGNOSIS - Testing each potential failure point")
     print("=" * 60)
-    
+
     # Step 1: Basic UDF functionality
     print("\n📋 Step 1: Testing basic UDF functionality...")
     try:
         basic_udf = test_step_1_basic_udf()
-        result1 = test_df.withColumn("test", basic_udf(col("pii_text"))).select("test").collect()
+        result1 = (
+            test_df.withColumn("test", basic_udf(col("pii_text")))
+            .select("test")
+            .collect()
+        )
         print(f"✅ Step 1 PASSED: {result1[0]['test']}")
     except Exception as e:
         print(f"❌ Step 1 FAILED: {str(e)}")
         return "BASIC_UDF_FAILURE"
-    
+
     # Step 2: Import testing
     print("\n📋 Step 2: Testing imports on workers...")
     try:
         imports_udf = test_step_2_imports()
-        result2 = test_df.withColumn("test", imports_udf(col("pii_text"))).select("test").collect()
+        result2 = (
+            test_df.withColumn("test", imports_udf(col("pii_text")))
+            .select("test")
+            .collect()
+        )
         print(f"✅ Step 2 PASSED: {result2[0]['test']}")
     except Exception as e:
         print(f"❌ Step 2 FAILED: {str(e)}")
         return "IMPORT_FAILURE"
-    
+
     # Step 3: Model loading (most likely culprit)
     print("\n📋 Step 3: Testing model loading (CRITICAL TEST)...")
     try:
         model_load_udf = test_step_3_model_loading(model_uri)
-        result3 = test_df.withColumn("test", model_load_udf(col("pii_text"))).select("test").collect()
+        result3 = (
+            test_df.withColumn("test", model_load_udf(col("pii_text")))
+            .select("test")
+            .collect()
+        )
         print(f"✅ Step 3 PASSED: {result3[0]['test']}")
     except Exception as e:
         print(f"❌ Step 3 FAILED: {str(e)}")
         print("🚨 MODEL LOADING IS THE PROBLEM!")
         return "MODEL_LOADING_FAILURE"
-    
-    print("\n✅ All diagnosis steps passed! The issue might be in the iterator complexity.")
+
+    print(
+        "\n✅ All diagnosis steps passed! The issue might be in the iterator complexity."
+    )
     return "ITERATOR_COMPLEXITY_ISSUE"
 
 
 # COMMAND ----------
 
-# MAGIC %md  
+# MAGIC %md
 # MAGIC ## DIAGNOSIS: Run this FIRST if batch inference hangs
-# MAGIC 
+# MAGIC
 # MAGIC This section systematically tests each potential failure point to identify exactly where the hanging occurs.
 
 # COMMAND ----------
 
 # UNCOMMENT AND RUN THIS CELL TO DIAGNOSE HANGING ISSUES
-# 
+#
 # # Get small test dataset
 # test_df = spark.table(full_source_table).limit(3)
-# 
+#
 # # Run systematic diagnosis
 # diagnosis_result = run_systematic_diagnosis(test_df, list(model_uris.values())[0] if model_uris else "test_uri")
-# 
+#
 # print(f"\n🎯 DIAGNOSIS RESULT: {diagnosis_result}")
-# 
+#
 # # Based on the result, here's what it means:
 # if diagnosis_result == "BASIC_UDF_FAILURE":
 #     print("❌ Problem: Spark UDF framework itself is broken")
-# elif diagnosis_result == "IMPORT_FAILURE": 
+# elif diagnosis_result == "IMPORT_FAILURE":
 #     print("❌ Problem: Required libraries not available on workers")
 #     print("   Solution: Check cluster libraries or restart cluster")
 # elif diagnosis_result == "MODEL_LOADING_FAILURE":
@@ -1310,11 +1338,12 @@ model_uris = {}
 # Train GLiNER model
 if model_type in ["gliner", "both"]:
     print(f"\n🔬 GLiNER Model: {gliner_model_name}")
-if train:
+    if train:
         gliner_uri = train_and_register_model(gliner_config, gliner_model_name)
         print(f"✅ GLiNER registered: {gliner_uri}")
-else:
-        gliner_uri = f"models:/{gliner_model_name}@champion"
+    else:
+        gliner_uri = f"models:/{gliner_model_name}@{alias}"
+        print(f"✅ GLiNER loading from UC: {gliner_uri}")
     model_uris["gliner"] = gliner_uri
 
 # Train BioBERT model
@@ -1326,7 +1355,8 @@ if model_type in ["biobert", "both"]:
         )
         print(f"✅ BioBERT registered: {biobert_uri}")
     else:
-        biobert_uri = f"models:/{biobert_model_name}@champion"
+        biobert_uri = f"models:/{biobert_model_name}@{alias}"
+        print(f"✅ BioBERT loading from UC: {biobert_uri}")
     model_uris["biobert"] = biobert_uri
 
 print(f"\n📋 Models registered:")
@@ -1350,29 +1380,29 @@ for model_name, model_uri in model_uris.items():
     print(f"   Model URI: {model_uri}")
 
     print(f"   Processing PII text with {model_name}...")
-pii_results = process_dataframe_ner(source_df, "pii_text", model_uri)
+    pii_results = process_dataframe_ner(source_df, "pii_text", model_uri)
 
     print(f"   Processing PHI text with {model_name}...")
-phi_results = process_dataframe_ner(source_df, "phi_text", model_uri)
+    phi_results = process_dataframe_ner(source_df, "phi_text", model_uri)
 
     # Join results
     model_results = source_df.join(
-    pii_results.select(
-        "id",
+        pii_results.select(
+            "id",
             col("detected_entities").alias(f"{model_name}_pii_detected_entities"),
             col("redacted_text").alias(f"{model_name}_pii_redacted_text"),
             col("entity_count").alias(f"{model_name}_pii_entity_count"),
-    ),
-    "id",
-).join(
-    phi_results.select(
+        ),
         "id",
+    ).join(
+        phi_results.select(
+            "id",
             col("detected_entities").alias(f"{model_name}_phi_detected_entities"),
             col("redacted_text").alias(f"{model_name}_phi_redacted_text"),
             col("entity_count").alias(f"{model_name}_phi_entity_count"),
-    ),
-    "id",
-)
+        ),
+        "id",
+    )
 
     all_model_results[model_name] = model_results
     print(f"   ✅ {model_name.upper()} processing complete")
@@ -1447,6 +1477,7 @@ display(df)
 # COMMAND ----------
 
 # Helper functions for evaluation metrics
+
 
 def calculate_entity_metrics(
     predicted_entities: List[Dict], ground_truth_entities: List[Dict]
@@ -1572,7 +1603,7 @@ def evaluate_single_model_performance(
     # Aggregate metrics
     def aggregate_metrics(metrics_list):
         if not metrics_list:
-    return {
+            return {
                 "precision": 0.0,
                 "recall": 0.0,
                 "f1": 0.0,
@@ -1722,16 +1753,39 @@ elif len(model_uris) == 2:
     print(f"\n📊 **MODEL COMPARISON RESULTS**")
     print("=" * 60)
 
-    # Individual model performance
+    # Individual model performance - DETAILED METRICS
     for model_name in model_names:
         results = comparison_results["individual_results"][model_name]
         overall = results["overall_performance"]
+        pii_perf = results["pii_performance"]
+        phi_perf = results["phi_performance"]
 
-        print(f"\n🔬 **{model_name.upper()} Performance:**")
-        print(f"   Overall F1-Score: {overall['avg_f1']:.3f}")
-        print(f"   Overall Precision: {overall['avg_precision']:.3f}")
-        print(f"   Overall Recall: {overall['avg_recall']:.3f}")
-        print(f"   Redaction Accuracy: {overall['avg_redaction_accuracy']:.3f}")
+        print(f"\n🔬 **{model_name.upper()} DETAILED PERFORMANCE:**")
+        print("=" * 50)
+
+        print(f"\n🔐 **PII Detection Metrics:**")
+        print(f"   Precision: {pii_perf['precision']:.3f}")
+        print(f"   Recall: {pii_perf['recall']:.3f}")
+        print(f"   F1-Score: {pii_perf['f1']:.3f}")
+        print(f"   Redaction Accuracy: {pii_perf['avg_redaction_accuracy']:.3f}")
+        print(f"   True Positives: {pii_perf['total_tp']}")
+        print(f"   False Positives: {pii_perf['total_fp']}")
+        print(f"   False Negatives: {pii_perf['total_fn']}")
+
+        print(f"\n🏥 **PHI Detection Metrics:**")
+        print(f"   Precision: {phi_perf['precision']:.3f}")
+        print(f"   Recall: {phi_perf['recall']:.3f}")
+        print(f"   F1-Score: {phi_perf['f1']:.3f}")
+        print(f"   Redaction Accuracy: {phi_perf['avg_redaction_accuracy']:.3f}")
+        print(f"   True Positives: {phi_perf['total_tp']}")
+        print(f"   False Positives: {phi_perf['total_fp']}")
+        print(f"   False Negatives: {phi_perf['total_fn']}")
+
+        print(f"\n🎯 **Overall Summary:**")
+        print(f"   Average F1-Score: {overall['avg_f1']:.3f}")
+        print(f"   Average Precision: {overall['avg_precision']:.3f}")
+        print(f"   Average Recall: {overall['avg_recall']:.3f}")
+        print(f"   Average Redaction Accuracy: {overall['avg_redaction_accuracy']:.3f}")
 
         # Security note
         if model_name == "gliner":
@@ -1774,13 +1828,75 @@ elif len(model_uris) == 2:
     print(f"   BioBERT: ✅ Compatible (~110M parameters)")
     print(f"   Both models fit comfortably on T4 GPU (16GB)")
 
+    # Detailed side-by-side comparison table
+    print(f"\n📋 **SIDE-BY-SIDE METRICS COMPARISON:**")
+    print("=" * 80)
+    print(f"{'Metric':<30} {'GLiNER':>12} {'BioBERT':>12} {'Difference':>12}")
+    print("-" * 80)
+
+    gliner_results = comparison_results["individual_results"]["gliner"]
+    biobert_results = comparison_results["individual_results"]["biobert"]
+
+    # PII Metrics
+    print("PII DETECTION:")
+    pii_metrics = [
+        ("PII F1-Score", "pii_performance", "f1"),
+        ("PII Precision", "pii_performance", "precision"),
+        ("PII Recall", "pii_performance", "recall"),
+        ("PII Redaction Acc.", "pii_performance", "avg_redaction_accuracy"),
+    ]
+
+    for metric_name, category, key in pii_metrics:
+        gliner_val = gliner_results[category][key]
+        biobert_val = biobert_results[category][key]
+        diff = gliner_val - biobert_val
+        print(
+            f"  {metric_name:<28} {gliner_val:>10.3f} {biobert_val:>10.3f} {diff:>+10.3f}"
+        )
+
+    print()
+    print("PHI DETECTION:")
+    phi_metrics = [
+        ("PHI F1-Score", "phi_performance", "f1"),
+        ("PHI Precision", "phi_performance", "precision"),
+        ("PHI Recall", "phi_performance", "recall"),
+        ("PHI Redaction Acc.", "phi_performance", "avg_redaction_accuracy"),
+    ]
+
+    for metric_name, category, key in phi_metrics:
+        gliner_val = gliner_results[category][key]
+        biobert_val = biobert_results[category][key]
+        diff = gliner_val - biobert_val
+        print(
+            f"  {metric_name:<28} {gliner_val:>10.3f} {biobert_val:>10.3f} {diff:>+10.3f}"
+        )
+
+    print()
+    print("OVERALL SUMMARY:")
+    overall_metrics = [
+        ("Overall F1-Score", "overall_performance", "avg_f1"),
+        ("Overall Precision", "overall_performance", "avg_precision"),
+        ("Overall Recall", "overall_performance", "avg_recall"),
+        ("Overall Redaction", "overall_performance", "avg_redaction_accuracy"),
+    ]
+
+    for metric_name, category, key in overall_metrics:
+        gliner_val = gliner_results[category][key]
+        biobert_val = biobert_results[category][key]
+        diff = gliner_val - biobert_val
+        print(
+            f"  {metric_name:<28} {gliner_val:>10.3f} {biobert_val:>10.3f} {diff:>+10.3f}"
+        )
+
+    print("=" * 80)
+
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Evaluation
 # MAGIC
-# MAGIC Note: Helper functions (calculate_entity_metrics, calculate_redaction_accuracy) 
+# MAGIC Note: Helper functions (calculate_entity_metrics, calculate_redaction_accuracy)
 # MAGIC are now defined earlier in the notebook to fix import order issues.
 
 

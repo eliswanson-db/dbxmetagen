@@ -23,9 +23,17 @@ class UIComponents:
 
     def __init__(self):
         self.config_manager = ConfigManager()
-        self.job_manager = JobManager()
         self.data_ops = DataOperations()
         self.metadata_processor = MetadataProcessor()
+        # Job manager will be initialized when workspace client is available
+        self._job_manager = None
+
+    @property
+    def job_manager(self):
+        """Get job manager, initializing if needed"""
+        if self._job_manager is None and st.session_state.get("workspace_client"):
+            self._job_manager = JobManager(st.session_state.workspace_client)
+        return self._job_manager
 
     def render_sidebar_config(self):
         """Render configuration sidebar."""
@@ -193,19 +201,23 @@ class UIComponents:
             self._debug_job_manager_creation(tables)
 
     def _render_job_creation_button(self, tables: List[str]):
-        """Render job creation button."""
+        """Render job creation button with working dialog trigger"""
         if st.button("🚀 Create & Run Job", type="primary"):
-            st.session_state.job_creation_status = "dialog"
+            # Show the job dialog directly (working implementation)
+            self.show_job_creation_dialog(tables)
 
     def _debug_job_manager_creation(self, tables: List[str]):
-        """Debug job manager creation."""
+        """Debug job manager creation - using working implementation"""
         if st.button("🔧 Debug Job Creation"):
-            with st.spinner("Creating job..."):
-                self.job_manager.create_and_run_job(
-                    job_name="debug_job",
-                    tables=tables[:3],  # Limit to 3 tables for testing
-                    cluster_size="small",
+            if not self.job_manager:
+                st.error(
+                    "❌ Databricks client not initialized. Please check connection."
                 )
+                return
+            with st.spinner("Creating debug job..."):
+                self.job_manager.debug_job_manager_creation(
+                    tables[:3]
+                )  # Limit to 3 tables for testing
 
     def _show_no_tables_warning(self):
         """Show warning when no tables are provided."""
@@ -259,43 +271,70 @@ class UIComponents:
             )
 
     def show_job_creation_dialog(self, tables: List[str]):
-        """Show job creation dialog."""
-        if st.session_state.get("job_creation_status") == "dialog":
-            with st.container():
-                st.subheader("🚀 Create Metadata Generation Job")
+        """Show job creation dialog with configuration options (WORKING IMPLEMENTATION)"""
+        st.markdown("---")
+        st.subheader("🚀 Create Metadata Generation Job")
 
-                col1, col2 = st.columns([3, 1])
+        with st.container():
+            col1, col2 = st.columns([2, 1])
 
-                with col1:
-                    job_name = st.text_input(
-                        "Job Name",
-                        value=f"metadata_job_{datetime.now().strftime('%Y%m%d_%H%M')}",
+            with col1:
+                job_name = st.text_input(
+                    "Job Name",
+                    value=f"dbxmetagen_job_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    help="Name for the metadata generation job",
+                )
+
+                cluster_size = st.selectbox(
+                    "Cluster Size",
+                    options=[
+                        "Small (1-2 workers)",
+                        "Medium (2-4 workers)",
+                        "Large (4-8 workers)",
+                    ],
+                    index=1,
+                    help="Cluster size for the job",
+                )
+
+                # Show tables that will be processed
+                with st.expander(f"📋 Tables to Process ({len(tables)})"):
+                    for i, table in enumerate(tables[:10], 1):
+                        st.write(f"{i}. {table}")
+                    if len(tables) > 10:
+                        st.write(f"... and {len(tables) - 10} more tables")
+
+            with col2:
+                st.markdown("**Current Configuration:**")
+                config_preview = {
+                    "Mode": st.session_state.config.get("mode", "comment"),
+                    "Allow Data": st.session_state.config.get("allow_data", False),
+                    "Sample Size": st.session_state.config.get("sample_size", 5),
+                    "Apply DDL": st.session_state.config.get("apply_ddl", False),
+                }
+
+                for key, value in config_preview.items():
+                    st.write(f"**{key}:** {value}")
+
+            # Create and run button (WORKING IMPLEMENTATION)
+            if st.button("🚀 Create & Run Job", type="primary", key="create_job_main"):
+                logger.info(
+                    f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
+                )
+
+                if not self.job_manager:
+                    st.error(
+                        "❌ Databricks client not initialized. Please check connection."
                     )
+                    return
 
-                with col2:
-                    cluster_size = st.selectbox(
-                        "Cluster Size", options=["small", "medium", "large"], index=0
-                    )
+                try:
+                    self.job_manager.create_and_run_job(job_name, tables, cluster_size)
+                except Exception as create_job_e:
+                    st.error(f"❌ Failed to create job: {create_job_e}")
+                    logger.error(f"ERROR in create_and_run_job: {create_job_e}")
+                    import traceback
 
-                st.write(f"**Tables to Process:** {len(tables)}")
-                with st.expander("Table List"):
-                    for table in tables:
-                        st.write(f"• {table}")
-
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    if st.button("✅ Create Job", type="primary"):
-                        self.job_manager.create_and_run_job(
-                            job_name, tables, cluster_size
-                        )
-                        st.session_state.job_creation_status = "idle"
-                        st.rerun()
-
-                with col2:
-                    if st.button("❌ Cancel"):
-                        st.session_state.job_creation_status = "idle"
-                        st.rerun()
+                    st.code(traceback.format_exc())
 
     def render_job_status_section(self):
         """Render job status monitoring section."""
@@ -305,26 +344,77 @@ class UIComponents:
             st.info("No jobs to display. Create a job above to track its status.")
             return
 
-        # Refresh controls
-        col1, col2, col3 = st.columns([1, 1, 2])
-
+        # Job status header with manual refresh button (WORKING IMPLEMENTATION)
+        col1, col2 = st.columns([3, 1])
         with col1:
-            if st.button("🔄 Refresh Status", type="secondary"):
-                self.job_manager.refresh_job_status()
-
+            st.subheader("📊 Job Status")
         with col2:
-            auto_refresh = st.checkbox(
-                "Auto Refresh", value=st.session_state.get("auto_refresh", False)
-            )
-            st.session_state.auto_refresh = auto_refresh
+            if st.button("🔄 Refresh Now", help="Manually refresh job status"):
+                if not self.job_manager:
+                    st.error(
+                        "❌ Databricks client not initialized. Please check connection."
+                    )
+                    return
+                with st.spinner("Refreshing job status..."):
+                    self.job_manager.refresh_job_status()
+                st.success("✅ Status refreshed!")
+                st.rerun()
 
-        with col3:
-            if auto_refresh:
-                refresh_interval = st.slider("Refresh Interval (seconds)", 10, 300, 30)
-                st.session_state.refresh_interval = refresh_interval
+        # Display job status using working format (run_id as key)
+        self._display_job_status_working()
 
-        # Display job status
-        self._display_job_status()
+    def _display_job_status_working(self):
+        """Display job status using working format (run_id as key)"""
+        for run_id, job_info in st.session_state.job_runs.items():
+            # Calculate progress for running jobs
+            progress = 0
+            if job_info["status"] == "SUCCESS":
+                progress = 100
+            elif job_info["status"] == "RUNNING":
+                # Estimate progress based on time elapsed (rough estimate)
+                start_time = job_info.get("start_time", datetime.now())
+                if isinstance(start_time, str):
+                    # Handle string timestamps
+                    try:
+                        start_time = datetime.fromisoformat(start_time)
+                    except:
+                        start_time = datetime.now()
+
+                elapsed = (datetime.now() - start_time).total_seconds()
+                progress = min(80, (elapsed / 600) * 100)  # Max 80% for running jobs
+            elif job_info["status"] == "FAILED":
+                progress = 0
+
+            with st.expander(
+                f"🔧 {job_info['job_name']} (Run ID: {run_id})",
+                expanded=job_info["status"] == "RUNNING",
+            ):
+                # Job details
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Job ID:** {job_info.get('job_id', 'Unknown')}")
+                    st.write(f"**Status:** {job_info['status']}")
+                    st.write(f"**Tables:** {len(job_info.get('tables', []))}")
+
+                with col2:
+                    st.write(
+                        f"**Cluster Size:** {job_info.get('cluster_size', 'Unknown')}"
+                    )
+                    st.write(f"**Created:** {job_info.get('created_at', 'Unknown')}")
+                    if job_info.get("result_state"):
+                        st.write(f"**Result:** {job_info['result_state']}")
+
+                # Progress bar
+                st.progress(progress / 100)
+
+                # Table list
+                tables = job_info.get("tables", [])
+                if tables:
+                    with st.expander(f"📋 Processing {len(tables)} Tables"):
+                        for i, table in enumerate(tables[:10], 1):
+                            st.write(f"{i}. {table}")
+                        if len(tables) > 10:
+                            st.write(f"... and {len(tables) - 10} more tables")
 
     def _display_job_status(self):
         """Display current job status."""
@@ -452,9 +542,14 @@ class UIComponents:
 
                 with col2:
                     if st.button("🚀 Create Sync Job"):
-                        self.job_manager.create_sync_metadata_job(
-                            df, uploaded_file.name
-                        )
+                        if not self.job_manager:
+                            st.error(
+                                "❌ Databricks client not initialized. Please check connection."
+                            )
+                        else:
+                            self.job_manager.create_sync_metadata_job(
+                                df, uploaded_file.name
+                            )
 
     def _apply_metadata(self, df: pd.DataFrame):
         """Apply metadata changes to tables."""
@@ -572,9 +667,7 @@ class UIComponents:
             )
 
 
+# Job dialog is now handled directly in the button click (working implementation)
 def handle_job_dialog_display():
-    """Handle job dialog display based on session state."""
-    if st.session_state.get("job_creation_status") == "dialog":
-        ui_components = UIComponents()
-        tables = st.session_state.get("selected_tables", [])
-        ui_components.show_job_creation_dialog(tables)
+    """DEPRECATED - Job dialog now handled directly in button click."""
+    pass

@@ -11,6 +11,8 @@
 ### - Stops execution immediately if job fails
 ### - Provides failure debugging information
 
+# TODO: delete this notebook
+
 # COMMAND ----------
 
 # MAGIC %pip install -r requirements.txt

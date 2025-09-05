@@ -1,20 +1,14 @@
 """
-Refactored DBX MetaGen Streamlit Application.
+DBXMetaGen Streamlit Application.
 
-This is the new modular version split into 4 clean modules:
-1. core/config.py - Configuration and state management
-2. core/jobs.py - Job management and Databricks operations
-3. core/data_ops.py - Data processing and validation
-4. ui/components.py - All UI rendering components
-
-This structure follows Streamlit best practices for maintainable apps.
 """
 
 import streamlit as st
 import logging
 import sys
+from core.config import ConfigManager, DatabricksClientManager
+from ui.components import UIComponents
 
-# Configure logging for Databricks Apps
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -25,33 +19,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Log app startup
 logger.info("🚀 DBX MetaGen App starting up...")
-print("🚀 [STARTUP] DBX MetaGen App starting up...")
 
-# Configure page
 st.set_page_config(
     page_title="DBX MetaGen",
     page_icon="🏷️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
-
-# Import modular components
-from core.config import ConfigManager, DatabricksClientManager
-from ui.components import UIComponents, handle_job_dialog_display
-
 
 class DBXMetaGenApp:
     """Main application class - now much cleaner and focused."""
 
     def __init__(self):
-        """Initialize the application."""
-        # Initialize core managers
+        """Initialize the application.""" # TODO: Leave off review here
         self.config_manager = ConfigManager()
         self.ui_components = UIComponents()
 
-        # Setup Databricks client with improved error handling
         client_ready = DatabricksClientManager.setup_client()
 
         if client_ready:
@@ -81,10 +65,6 @@ class DBXMetaGenApp:
 
         with tab1:
             self.ui_components.render_unified_table_management()
-
-            # Handle job dialog if needed
-            handle_job_dialog_display()
-
             st.markdown("---")
             self.ui_components.render_job_status_section()
 

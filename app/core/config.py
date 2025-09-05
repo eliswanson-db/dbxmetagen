@@ -38,18 +38,48 @@ class ConfigManager:
                 st.session_state[key] = default_value
 
     def load_default_config(self) -> Dict[str, Any]:
-        """Load configuration from YAML files with intelligent search."""
+        """Load configuration from cached or variables.yml file."""
+        # Check for cached config
         cached_config = self._get_cached_config()
         if cached_config is not None:
             logger.info("Using cached configuration")
             return cached_config
 
-        config = self._load_config_from_available_paths()
-        if config is None:
-            logger.warning("No config file found, using built-in defaults")
-            config = self.get_builtin_defaults()
-
+        # Load variables.yml and set it up as config
+        config = self._load_variables_yml()
         return self._cache_and_return_config(config)
+
+    def _load_variables_yml(self) -> Dict[str, Any]:
+        """Load configuration from variables.yml file."""
+        variables_yml_paths = [
+            "./variables.yml",
+            "../variables.yml",
+            "./app/variables.yml",
+            "../app/variables.yml",
+        ]
+
+        for yaml_path in variables_yml_paths:
+            if os.path.exists(yaml_path):
+                try:
+                    logger.info(f"Loading variables.yml from {yaml_path}")
+                    with open(yaml_path, "r") as f:
+                        raw_config = yaml.safe_load(f)
+                    if raw_config:
+                        # Extract default values if structured as variables.default
+                        config = raw_config.get("variables", {}).get(
+                            "default", raw_config
+                        )
+                        logger.info(
+                            f"Successfully loaded variables.yml with {len(config)} keys"
+                        )
+                        return config
+                except Exception as e:
+                    logger.warning(f"Failed to load {yaml_path}: {str(e)}")
+                    continue
+
+        # If no variables.yml found, return empty config
+        logger.warning("No variables.yml file found")
+        return {}
 
     def _get_cached_config(self) -> Optional[Dict[str, Any]]:
         """Check if we have a valid cached configuration."""
