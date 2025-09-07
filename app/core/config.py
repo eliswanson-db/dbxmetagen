@@ -3,6 +3,14 @@ Core configuration and state management module.
 Handles YAML config loading, session state, and Databricks client setup.
 """
 
+# TODO: This module is not woring correctly. It is not loading the correct variables.yml file.
+# TODO: This module is not initializing the configuration correctly for the notebook job either. It needs to take the configurations from variables.yml and then from the config from the app that the user chooses in the app UI and pass them to the notebook job as parameters.
+# TODO: all instances of host name here should fetch the hostname from the app environment instead of hardcoding it or fetching it from configuration
+# TODO: Review each function to see what is actually used. If necessary, break functions and methods into smaller pieces that are more composable and easier to undersatnd.
+# TODO: 
+
+
+
 import streamlit as st
 import yaml
 import os
@@ -51,6 +59,7 @@ class ConfigManager:
 
     def _load_variables_yml(self) -> Dict[str, Any]:
         """Load configuration from variables.yml file."""
+        # TODO: this should only reference variables.yml from the root of the project.
         variables_yml_paths = [
             "./variables.yml",
             "../variables.yml",

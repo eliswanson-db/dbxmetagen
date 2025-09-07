@@ -23,7 +23,7 @@ resources:
           job_cluster_key: dspy_training_cluster
           
           notebook_task:
-            notebook_path: ../../notebooks/dspy_training_quickstart.py
+            notebook_path: ../../dspy/dspy_training_quickstart.py
             base_parameters:
               catalog_name: ${var.catalog_name}
               schema_name: ${var.schema_name}

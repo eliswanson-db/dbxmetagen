@@ -1,6 +1,5 @@
 """
-DBXMetaGen Streamlit Application.
-
+DBXMetaGen Streamlit Application
 """
 
 import streamlit as st
@@ -51,11 +50,9 @@ class DBXMetaGenApp:
 
     def run(self):
         """Main app execution - clean and organized."""
-        # Header
-        st.title("🏷️ DBX MetaGen")
-        st.markdown("### AI-Powered Metadata Generation for Databricks Tables")
+        st.title("🏷️ DBXMetaGen")
+        st.markdown("### AI-Powered Metadata Generation & PI Identification & Classification for Databricks Tables")
 
-        # Sidebar configuration
         self.ui_components.render_sidebar_config()
 
         # Main content tabs
@@ -85,13 +82,11 @@ class DBXMetaGenApp:
         if st.sidebar.button("Show Debug Info"):
             st.sidebar.write("**System Status:**")
 
-            # Check workspace client
             if st.session_state.get("workspace_client"):
                 st.sidebar.write("- Workspace Client: ✅ Connected")
             else:
                 st.sidebar.write("- Workspace Client: ❌ Not initialized")
 
-            # Check config
             if st.session_state.get("config"):
                 st.sidebar.write(f"- Config: ✅ {len(st.session_state.config)} keys")
             else:

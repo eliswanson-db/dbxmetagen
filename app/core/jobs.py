@@ -17,6 +17,53 @@ from databricks.sdk.service.compute import Environment
 logger = logging.getLogger(__name__)
 
 
+class DBXJobManager:
+    """Handles Databricks job creation and monitoring - clean and simple"""
+    def __init__(self, workspace_client: WorkspaceClient):
+        self.workspace_client = workspace_client
+
+    def create_metadata_job(
+        self,
+        job_name: str,
+        tables: List[str],
+        config: Dict[str, Any],
+        user_email: Optional[str] = None,
+    ) -> Tuple[int, int]:
+        """Create and run a metadata generation job"""
+        logger.info(f"Creating metadata job: {job_name}")
+        w = WorkspaceClient()
+        notebook_path = f"/Users/{w.current_user.me().user_name}/
+
+        if config.get("cluster_id"):
+            created_job = w.jobs.create(
+                name=f"sdk-{time.time_ns()}",
+                tasks=[
+                    jobs.Task(
+                        description="test",
+                        existing_cluster_id=cluster_id,
+                        notebook_task=NotebookTask(notebook_path=notebook_path),
+                        task_key="test",
+                        timeout_seconds=0,
+                    )
+                ],
+            )
+        else:
+            created_job = w.jobs.create(
+                name=f"sdk-{time.time_ns()}",
+                tasks=[
+                    jobs.Task(
+                        description="test",
+                        notebook_task=jobs.NotebookTask(notebook_path=notebook_path),
+                        task_key="test",
+                        timeout_seconds=0,
+                    )
+                ],
+            )
+    return created_job.job_id, created_job.run_id
+
+
+
+
 class JobManager:
     """Handles Databricks job creation and monitoring - clean and simple"""
 

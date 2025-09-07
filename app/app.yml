@@ -15,5 +15,5 @@ env:
     value: "dev"  # use "prod" in production deployments
   - name: DEPLOY_USER_NAME
     value: ""  # optional: set to the deploying user's email (e.g., user@company.com)
-  # - name: NOTEBOOK_PATH
-  #   value: "/Workspace/Shared/dbxmetagen/dev/files/notebooks/generate_metadata"  # optional explicit override
+  - name: NOTEBOOK_PATH
+    value: "/Workspace/Shared/dbxmetagen/dev/files/notebooks/generate_metadata"  # optional explicit override
