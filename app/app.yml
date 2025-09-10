@@ -16,4 +16,4 @@ env:
   - name: DEPLOY_USER_NAME
     value: ""  # optional: set to the deploying user's email (e.g., user@company.com)
   - name: NOTEBOOK_PATH
-    value: "/Workspace/Shared/dbxmetagen/dev/files/notebooks/generate_metadata"  # optional explicit override
+    value: "/Workspace/Users/eli.swanson@databricks.com/.bundle/dbxmetagen/dev/files/notebooks/generate_metadata"  # Use bundle user path

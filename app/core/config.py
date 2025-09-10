@@ -3,14 +3,7 @@ Core configuration and state management module.
 Handles YAML config loading, session state, and Databricks client setup.
 """
 
-# TODO: This module is not woring correctly. It is not loading the correct variables.yml file.
-# TODO: This module is not initializing the configuration correctly for the notebook job either. It needs to take the configurations from variables.yml and then from the config from the app that the user chooses in the app UI and pass them to the notebook job as parameters.
-# TODO: all instances of host name here should fetch the hostname from the app environment instead of hardcoding it or fetching it from configuration
-# TODO: Review each function to see what is actually used. If necessary, break functions and methods into smaller pieces that are more composable and easier to undersatnd.
-# TODO: 
-
-
-
+import time
 import streamlit as st
 import yaml
 import os
@@ -59,145 +52,53 @@ class ConfigManager:
 
     def _load_variables_yml(self) -> Dict[str, Any]:
         """Load configuration from variables.yml file."""
-        # TODO: this should only reference variables.yml from the root of the project.
-        variables_yml_paths = [
-            "./variables.yml",
-            "../variables.yml",
-            "./app/variables.yml",
-            "../app/variables.yml",
-        ]
+        yaml_path = "./variables.yml"  # Root of project
 
-        for yaml_path in variables_yml_paths:
-            if os.path.exists(yaml_path):
-                try:
-                    logger.info(f"Loading variables.yml from {yaml_path}")
-                    with open(yaml_path, "r") as f:
-                        raw_config = yaml.safe_load(f)
-                    if raw_config:
-                        # Extract default values if structured as variables.default
-                        config = raw_config.get("variables", {}).get(
-                            "default", raw_config
-                        )
-                        logger.info(
-                            f"Successfully loaded variables.yml with {len(config)} keys"
-                        )
-                        return config
-                except Exception as e:
-                    logger.warning(f"Failed to load {yaml_path}: {str(e)}")
-                    continue
+        if not os.path.exists(yaml_path):
+            raise FileNotFoundError(f"variables.yml not found at {yaml_path}")
 
-        # If no variables.yml found, return empty config
-        logger.warning("No variables.yml file found")
-        return {}
+        logger.info(f"Loading variables.yml from {yaml_path}")
+        with open(yaml_path, "r") as f:
+            raw_config = yaml.safe_load(f)
+
+        if not raw_config or "variables" not in raw_config:
+            raise ValueError(
+                "Invalid variables.yml structure - missing 'variables' key"
+            )
+
+        # Extract default values from variables.yml structure
+        config = {}
+        variables = raw_config["variables"]
+
+        for key, value_config in variables.items():
+            if isinstance(value_config, dict) and "default" in value_config:
+                config[key] = value_config["default"]
+            else:
+                config[key] = value_config
+
+        logger.info(f"Successfully loaded variables.yml with {len(config)} keys")
+        return config
 
     def _get_cached_config(self) -> Optional[Dict[str, Any]]:
-        """Check if we have a valid cached configuration."""
+        """Check if we have a valid cached configuration and return it."""
         if st.session_state.config and isinstance(st.session_state.config, dict):
             return st.session_state.config
         return None
-
-    def _load_config_from_available_paths(self) -> Optional[Dict[str, Any]]:
-        """Try to load config from various possible paths."""
-        search_paths = self._get_config_search_paths()
-
-        for config_path in search_paths:
-            config = self._try_load_single_config_file(config_path)
-            if config is not None:
-                return config
-
-        return None
-
-    def _get_config_search_paths(self) -> List[str]:
-        """Get list of paths to search for config files."""
-        return [
-            "./config.yml",
-            "../config.yml",
-            "./app/config.yml",
-            "../app/config.yml",
-            "./configuration_files/config.yml",
-        ]
-
-    def _try_load_single_config_file(
-        self, config_path: str
-    ) -> Optional[Dict[str, Any]]:
-        """Attempt to load a single config file."""
-        try:
-            if os.path.exists(config_path):
-                logger.info(f"Loading configuration from {config_path}")
-                raw_config = self._load_yaml_file(config_path)
-                if raw_config:
-                    return self._process_raw_config(raw_config)
-        except Exception as e:
-            logger.warning(f"Failed to load config from {config_path}: {str(e)}")
-        return None
-
-    def _load_yaml_file(self, config_path: str) -> Optional[Dict[str, Any]]:
-        """Load YAML file content."""
-        try:
-            with open(config_path, "r") as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            logger.error(f"Error reading YAML file {config_path}: {str(e)}")
-            return None
-
-    def _process_raw_config(self, raw_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Process raw config data into usable configuration."""
-        config = self._extract_default_values(raw_config)
-        config = self._apply_config_post_processing(config)
-        return config
-
-    def _extract_default_values(self, raw_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract default values from raw configuration."""
-        return raw_config.get("variables", {}).get("default", raw_config)
-
-    def _apply_config_post_processing(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply various post-processing steps to configuration."""
-        config = self._apply_host_override(config)
-        config = self._sanitize_placeholder_values(config)
-        return config
 
     def _apply_host_override(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Override host from environment if available."""
         env_host = os.environ.get("DATABRICKS_HOST")
         if env_host:
-            config["databricks_host"] = env_host
-            logger.info("Overrode host from DATABRICKS_HOST environment variable")
+            config["host"] = env_host
+            logger.info("Using DATABRICKS_HOST environment variable")
         return config
-
-    def _sanitize_placeholder_values(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Remove unresolved placeholder values."""
-        sanitized = {}
-        for key, value in config.items():
-            if isinstance(value, str) and self._is_unresolved_placeholder(value):
-                logger.warning(f"Skipping unresolved placeholder for {key}: {value}")
-                continue
-            sanitized[key] = value
-        return sanitized
-
-    def _is_unresolved_placeholder(self, value: str) -> bool:
-        """Check if a value is an unresolved placeholder."""
-        placeholder_patterns = ["{{", "${", "${{"]
-        return any(pattern in value for pattern in placeholder_patterns)
 
     def _cache_and_return_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Cache configuration in session state and return."""
+        config = self._apply_host_override(config)
         st.session_state.config = config
         logger.info(f"Configuration loaded with {len(config)} keys")
         return config
-
-    def get_builtin_defaults(self) -> Dict[str, Any]:
-        """Return built-in default configuration."""
-        return {
-            "catalog_name": "dbxmetagen",
-            "databricks_host": "https://your-workspace.cloud.databricks.com",
-            "schema_name": "metadata_results",
-            "volume_name": "generated_metadata",
-            "allow_data": True,
-            "sample_size": 100,
-            "mode": "both",
-            "apply_metadata": False,
-            "cluster_size": "small",
-        }
 
 
 class DatabricksClientManager:
@@ -267,13 +168,32 @@ class DatabricksClientManager:
             st.error(error_msg)
             return None
 
-        if not DatabricksClientManager._is_valid_host_url(host):
+        # Normalize host URL by adding protocol if missing
+        normalized_host = DatabricksClientManager._normalize_host_url(host)
+
+        if not DatabricksClientManager._is_valid_host_url(normalized_host):
             error_msg = f"❌ Invalid host URL format: {host}"
             logger.error(error_msg)
             st.error(error_msg)
             return None
 
-        logger.info(f"Using Databricks host: {host}")
+        logger.info(f"Using Databricks host: {normalized_host}")
+        return normalized_host
+
+    @staticmethod
+    def _normalize_host_url(host: str) -> str:
+        """
+        Normalize host URL by adding https:// protocol if missing.
+
+        Args:
+            host: Raw host URL that may or may not include protocol
+
+        Returns:
+            str: Normalized host URL with protocol
+        """
+        host = host.strip()
+        if not host.startswith(("https://", "http://")):
+            host = f"https://{host}"
         return host
 
     @staticmethod
@@ -362,29 +282,10 @@ class DatabricksClientManager:
 
     @staticmethod
     def _handle_setup_error(error: Exception):
-        """
-        Handle setup errors with proper logging and user feedback.
-
-        Args:
-            error: Exception that occurred during setup
-        """
+        """Handle setup errors with proper logging and user feedback."""
         error_msg = f"Failed to setup Databricks client: {str(error)}"
         logger.error(error_msg, exc_info=True)
-
-        # Show user-friendly error message
         st.error(f"❌ Connection Error: {str(error)}")
-
-        # Provide troubleshooting hints
-        with st.expander("🔧 Troubleshooting Tips"):
-            st.markdown(
-                """
-            **Common Solutions:**
-            - Ensure `DATABRICKS_HOST` environment variable is set
-            - Verify your Databricks token is valid
-            - Check network connectivity to your workspace
-            - Confirm you have proper permissions
-            """
-            )
 
     @staticmethod
     def _extract_user_token() -> Optional[str]:

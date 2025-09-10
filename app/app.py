@@ -27,11 +27,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+
 class DBXMetaGenApp:
     """Main application class - now much cleaner and focused."""
 
     def __init__(self):
-        """Initialize the application.""" # TODO: Leave off review here
+        """Initialize the application."""  # TODO: Leave off review here
         self.config_manager = ConfigManager()
         self.ui_components = UIComponents()
 
@@ -51,7 +52,9 @@ class DBXMetaGenApp:
     def run(self):
         """Main app execution - clean and organized."""
         st.title("🏷️ DBXMetaGen")
-        st.markdown("### AI-Powered Metadata Generation & PI Identification & Classification for Databricks Tables")
+        st.markdown(
+            "### AI-Powered Metadata Generation & PI Identification & Classification for Databricks Tables"
+        )
 
         self.ui_components.render_sidebar_config()
 
@@ -114,6 +117,7 @@ if __name__ == "__main__":
         logger.error("❌ Application failed to start: %s", str(e))
         st.error(f"❌ Application Error: {str(e)}")
 
-        # Show error details in expander
-        with st.expander("Error Details"):
+        # Show error details directly (no expander to avoid nesting issues)
+        st.code(str(e))
+        if st.button("Show Full Exception"):
             st.exception(e)

@@ -1,10 +1,12 @@
 import os
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 
 import streamlit as st
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service import jobs
 from databricks.sdk.service.jobs import (
     NotebookTask,
     JobEnvironment,
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class DBXJobManager:
     """Handles Databricks job creation and monitoring - clean and simple"""
+
     def __init__(self, workspace_client: WorkspaceClient):
         self.workspace_client = workspace_client
 
@@ -32,7 +35,7 @@ class DBXJobManager:
         """Create and run a metadata generation job"""
         logger.info(f"Creating metadata job: {job_name}")
         w = WorkspaceClient()
-        notebook_path = f"/Users/{w.current_user.me().user_name}/
+        notebook_path = f"/Users/{w.current_user.me().user_name}/"
 
         if config.get("cluster_id"):
             created_job = w.jobs.create(
@@ -40,7 +43,7 @@ class DBXJobManager:
                 tasks=[
                     jobs.Task(
                         description="test",
-                        existing_cluster_id=cluster_id,
+                        existing_cluster_id=config.get("cluster_id"),
                         notebook_task=NotebookTask(notebook_path=notebook_path),
                         task_key="test",
                         timeout_seconds=0,
@@ -59,9 +62,8 @@ class DBXJobManager:
                     )
                 ],
             )
-    return created_job.job_id, created_job.run_id
 
-
+        return created_job.job_id, created_job.run_id
 
 
 class JobManager:
@@ -412,7 +414,24 @@ class JobManager:
 
         except Exception as e:
             st.error(f"❌ Failed to create job: {str(e)}")
-            logger.error(f"Failed to create job: {str(e)}")
+            logger.error(f"Failed to create job: {str(e)}", exc_info=True)
+
+            # Show debug details (matching debug method behavior)
+            st.markdown("**Debug Information:**")
+            st.write(f"- Job name: {job_name}")
+            st.write(f"- Tables: {len(tables)} total")
+            st.write(f"- Cluster size: {cluster_size}")
+            st.write(
+                f"- Config available: {'Yes' if st.session_state.config else 'No'}"
+            )
+            st.write(
+                f"- Workspace client: {'Yes' if st.session_state.get('workspace_client') else 'No'}"
+            )
+
+            # Show full exception details
+            import traceback
+
+            st.code(traceback.format_exc())
 
     def debug_job_manager_creation(self, tables: List[str]):
         """Debug job creation with a test job"""

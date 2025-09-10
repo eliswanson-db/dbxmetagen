@@ -5,7 +5,9 @@ bundle:
 include:
   - resources/jobs/*.yml
   - resources/apps/*.yml
+  - benchmarks/resources/jobs/benchmarks/*.yml
   - variables.yml
+
 
 artifacts:
   default:

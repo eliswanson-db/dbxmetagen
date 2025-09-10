@@ -1,0 +1,5 @@
+# Additional requirements for benchmarking
+scikit-learn>=1.3.0
+pandas>=2.0.0
+faker>=19.0.0
+numpy>=1.24.0

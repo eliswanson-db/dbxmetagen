@@ -1,0 +1,286 @@
+resources:
+  jobs:
+    dbxmetagen_cost_benchmark:
+      name: dbxmetagen_cost_benchmark_${bundle.environment}
+      
+      job_clusters:
+        - job_cluster_key: cost_benchmark_2_workers
+          new_cluster:
+            spark_version: "15.4.x-cpu-ml-scala2.12"
+            node_type_id: Standard_D16a_v4
+            driver_node_type_id: Standard_D16a_v4
+            num_workers: 2
+            custom_tags:
+              Project: dbxmetagen
+              Environment: ${bundle.environment}
+              JobType: cost_benchmark
+              WorkerCount: "2"
+              
+        - job_cluster_key: cost_benchmark_4_workers
+          new_cluster:
+            spark_version: "15.4.x-cpu-ml-scala2.12"
+            node_type_id: Standard_D16a_v4
+            driver_node_type_id: Standard_D16a_v4
+            num_workers: 4
+            custom_tags:
+              Project: dbxmetagen
+              Environment: ${bundle.environment}
+              JobType: cost_benchmark
+              WorkerCount: "4"
+              
+      tasks:
+        # Scenario 1: 5 tables, 10 columns, 10k rows - 2 workers
+        - task_key: generate_scenario_1_tables
+          job_cluster_key: cost_benchmark_2_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_1_2workers"
+              num_tables: "5"
+              num_columns: "10"
+              num_rows: "10000"
+              
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_1_2workers
+          job_cluster_key: cost_benchmark_2_workers
+          depends_on:
+            - task_key: generate_scenario_1_tables
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_1_2workers"
+              num_workers: "2"
+              mode: "pi"
+              
+          timeout_seconds: 3600
+          max_retries: 1
+
+        # Scenario 1: 5 tables, 10 columns, 10k rows - 4 workers
+        - task_key: generate_scenario_1_tables_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_1_4workers"
+              num_tables: "5"
+              num_columns: "10"
+              num_rows: "10000"
+              
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_1_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          depends_on:
+            - task_key: generate_scenario_1_tables_4workers
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_1_4workers"
+              num_workers: "4"
+              mode: "pi"
+              
+          timeout_seconds: 3600
+          max_retries: 1
+
+        # Scenario 2: 5 tables, 10 columns, 1M rows - 2 workers
+        - task_key: generate_scenario_2_tables
+          job_cluster_key: cost_benchmark_2_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_2_2workers"
+              num_tables: "5"
+              num_columns: "10"
+              num_rows: "1000000"
+              
+          timeout_seconds: 3600
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_2_2workers
+          job_cluster_key: cost_benchmark_2_workers
+          depends_on:
+            - task_key: generate_scenario_2_tables
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_2_2workers"
+              num_workers: "2"
+              mode: "pi"
+              
+          timeout_seconds: 7200
+          max_retries: 1
+
+        # Scenario 2: 5 tables, 10 columns, 1M rows - 4 workers
+        - task_key: generate_scenario_2_tables_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_2_4workers"
+              num_tables: "5"
+              num_columns: "10"
+              num_rows: "1000000"
+              
+          timeout_seconds: 3600
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_2_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          depends_on:
+            - task_key: generate_scenario_2_tables_4workers
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_2_4workers"
+              num_workers: "4"
+              mode: "pi"
+              
+          timeout_seconds: 7200
+          max_retries: 1
+
+        # Scenario 3: 5 tables, 100 columns, 10k rows - 2 workers
+        - task_key: generate_scenario_3_tables
+          job_cluster_key: cost_benchmark_2_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_3_2workers"
+              num_tables: "5"
+              num_columns: "100"
+              num_rows: "10000"
+              
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_3_2workers
+          job_cluster_key: cost_benchmark_2_workers
+          depends_on:
+            - task_key: generate_scenario_3_tables
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_3_2workers"
+              num_workers: "2"
+              mode: "pi"
+              
+          timeout_seconds: 5400
+          max_retries: 1
+
+        # Scenario 3: 5 tables, 100 columns, 10k rows - 4 workers
+        - task_key: generate_scenario_3_tables_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          
+          notebook_task:
+            notebook_path: ../notebooks/generate_cost_benchmark_tables.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_3_4workers"
+              num_tables: "5"
+              num_columns: "100"
+              num_rows: "10000"
+              
+          timeout_seconds: 1800
+          max_retries: 1
+
+        - task_key: run_dbxmetagen_scenario_3_4workers
+          job_cluster_key: cost_benchmark_4_workers
+          depends_on:
+            - task_key: generate_scenario_3_tables_4workers
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/run_cost_benchmark.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "cost_benchmarks"
+              scenario_name: "scenario_3_4workers"
+              num_workers: "4"
+              mode: "pi"
+              
+          timeout_seconds: 5400
+          max_retries: 1
+
+        # Final analysis task
+        - task_key: analyze_cost_benchmark_results
+          job_cluster_key: cost_benchmark_2_workers
+          depends_on:
+            - task_key: run_dbxmetagen_scenario_1_2workers
+              outcome: SUCCESS
+            - task_key: run_dbxmetagen_scenario_1_4workers
+              outcome: SUCCESS
+            - task_key: run_dbxmetagen_scenario_2_2workers
+              outcome: SUCCESS
+            - task_key: run_dbxmetagen_scenario_2_4workers
+              outcome: SUCCESS
+            - task_key: run_dbxmetagen_scenario_3_2workers
+              outcome: SUCCESS
+            - task_key: run_dbxmetagen_scenario_3_4workers
+              outcome: SUCCESS
+          
+          notebook_task:
+            notebook_path: ../notebooks/analyze_cost_results.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              schema_name: "benchmarks"
+              results_table: "${var.catalog_name}.benchmarks.cost_benchmark_results"
+              report_table: "${var.catalog_name}.benchmarks.cost_analysis_report"
+              
+          timeout_seconds: 1800
+          max_retries: 1
+      
+      email_notifications:
+        on_failure:
+          - ${var.current_user}
+        on_success:
+          - ${var.current_user}
+
+      tags:
+        project: dbxmetagen
+        environment: ${bundle.environment}
+        job_type: cost_benchmark
+        created_by: databricks_asset_bundle
+
+      parameters:
+        - name: benchmark_run_id
+          default: ""
+        - name: cleanup_tables_after_run
+          default: "true"

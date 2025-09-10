@@ -315,7 +315,7 @@ class UIComponents:
                 for key, value in config_preview.items():
                     st.write(f"**{key}:** {value}")
 
-            # Create and run button (WORKING IMPLEMENTATION)
+            # Create and run button (IMPROVED IMPLEMENTATION)
             if st.button("🚀 Create & Run Job", type="primary", key="create_job_main"):
                 logger.info(
                     f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
@@ -327,14 +327,29 @@ class UIComponents:
                     )
                     return
 
-                try:
-                    self.job_manager.create_and_run_job(job_name, tables, cluster_size)
-                except Exception as create_job_e:
-                    st.error(f"❌ Failed to create job: {create_job_e}")
-                    logger.error(f"ERROR in create_and_run_job: {create_job_e}")
-                    import traceback
+                with st.spinner("Creating and running job..."):
+                    try:
+                        # Add debug output
+                        st.write(f"🔧 Debug: Starting job creation...")
+                        st.write(f"🔧 Job name: {job_name}")
+                        st.write(f"🔧 Tables: {len(tables)} total")
+                        st.write(f"🔧 Cluster size: {cluster_size}")
+                        st.write(
+                            f"🔧 Config keys: {list(st.session_state.config.keys())}"
+                        )
 
-                    st.code(traceback.format_exc())
+                        self.job_manager.create_and_run_job(
+                            job_name, tables, cluster_size
+                        )
+
+                        st.write("🔧 Debug: Job creation completed successfully")
+                    except Exception as create_job_e:
+                        st.error(f"❌ Failed to create job: {create_job_e}")
+                        logger.error(f"ERROR in create_and_run_job: {create_job_e}")
+                        import traceback
+
+                        st.markdown("**Full Error Traceback:**")
+                        st.code(traceback.format_exc())
 
     def render_job_status_section(self):
         """Render job status monitoring section."""
@@ -410,58 +425,11 @@ class UIComponents:
                 # Table list
                 tables = job_info.get("tables", [])
                 if tables:
-                    with st.expander(f"📋 Processing {len(tables)} Tables"):
-                        for i, table in enumerate(tables[:10], 1):
-                            st.write(f"{i}. {table}")
-                        if len(tables) > 10:
-                            st.write(f"... and {len(tables) - 10} more tables")
-
-    def _display_job_status(self):
-        """Display current job status."""
-        for job_id, job_info in st.session_state.job_runs.items():
-            with st.container():
-                # Job header
-                col1, col2, col3 = st.columns([2, 1, 1])
-
-                with col1:
-                    st.subheader(f"Job {job_id}: {job_info.get('job_name', 'Unknown')}")
-
-                with col2:
-                    status = job_info.get("status", "UNKNOWN")
-                    if status == "RUNNING":
-                        st.info(f"🔄 {status}")
-                    elif status == "SUCCESS":
-                        st.success(f"✅ {status}")
-                    elif status in ["FAILED", "CANCELLED"]:
-                        st.error(f"❌ {status}")
-                    else:
-                        st.warning(f"⚠️ {status}")
-
-                with col3:
-                    created_at = job_info.get("created_at", "Unknown")
-                    if isinstance(created_at, str):
-                        try:
-                            created = datetime.fromisoformat(created_at)
-                            st.write(f"Created: {created.strftime('%H:%M')}")
-                        except:
-                            st.write(f"Created: {created_at}")
-
-                # Job details
-                with st.expander("Job Details"):
-                    st.write(f"**Run ID:** {job_info.get('run_id', 'Unknown')}")
-                    st.write(
-                        f"**Cluster Size:** {job_info.get('cluster_size', 'Unknown')}"
-                    )
-                    st.write(f"**Tables:** {len(job_info.get('tables', []))}")
-
-                    # Show table list
-                    tables = job_info.get("tables", [])
-                    if tables:
-                        st.write("**Table List:**")
-                        for table in tables[:10]:  # Show first 10
-                            st.write(f"• {table}")
-                        if len(tables) > 10:
-                            st.write(f"... and {len(tables) - 10} more tables")
+                    st.markdown(f"**📋 Processing {len(tables)} Tables:**")
+                    for i, table in enumerate(tables[:10], 1):
+                        st.write(f"{i}. {table}")
+                    if len(tables) > 10:
+                        st.write(f"... and {len(tables) - 10} more tables")
 
     def render_results_viewer(self):
         """Render results viewing interface."""
@@ -564,9 +532,9 @@ class UIComponents:
                 )
 
                 if results.get("errors"):
-                    with st.expander("Error Details"):
-                        for error in results["errors"]:
-                            st.write(f"• {error}")
+                    st.markdown("**Error Details:**")
+                    for error in results["errors"]:
+                        st.write(f"• {error}")
 
     def _download_metadata(self, df: pd.DataFrame, format: str):
         """Download metadata in specified format."""

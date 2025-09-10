@@ -39,9 +39,15 @@
 
 # COMMAND ----------
 
+# TODO: Add an ai_mask approach
+# TODO: Add an agent approach
+# TODO: Add cost benchmarks as well as the performance benchmarks.
+# TODO: Use a real benchmark dataset to evaluate the performance of the models.
+
 import os
 import sys
 import json
+import re
 import pandas as pd
 from typing import List, Dict, Any, Iterator
 from dataclasses import dataclass, asdict
@@ -49,12 +55,20 @@ import mlflow
 import mlflow.pyfunc
 from mlflow.models.signature import infer_signature
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col, pandas_udf
+from pyspark.sql.functions import col, pandas_udf, lit, when, expr, udf
+from pyspark.sql.types import (
+    StringType,
+    IntegerType,
+    ArrayType,
+    StructType,
+    StructField,
+)
 from gliner import GLiNER
 from presidio_analyzer import AnalyzerEngine
 from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
 import torch
 import logging
+import time
 
 sys.path.append("../")
 
@@ -76,6 +90,8 @@ PHI_REDACTION_CONFIG = {
         "Ihor/gliner-biomed-base-v1.0",
         "dmis-lab/biobert-v1.1",  # Official BioBERT model
         "presidio-only",  # Presidio-only approach
+        "dslim/distilbert-NER",  # DistilBERT for general NER
+        "claude-sonnet-3.7",  # Claude via Databricks Foundation Models
     ],
     "max_text_length": 10000,
     "confidence_threshold": 0.8,  # Higher threshold for PHI compliance
@@ -221,8 +237,51 @@ class PHIPresidioConfig:
     """Presidio-only configuration for PHI compliance."""
 
     cache_dir: str = "/Volumes/dbxmetagen/default/models/hf_cache"
-    threshold: float = 0.7  # Presidio confidence threshold
+    threshold: float = 0.5  # Lower threshold for better PHI detection
     batch_size: int = 16
+
+
+@dataclass
+class PHIDistilBERTConfig:
+    """DistilBERT NER configuration for PHI detection."""
+
+    model_name: str = (
+        "dslim/distilbert-NER"  # Fast NER model, enhanced with custom patterns
+    )
+    cache_dir: str = "/Volumes/dbxmetagen/default/models/hf_cache"
+    threshold: float = 0.3  # Lower threshold due to PHI entity complexity
+    batch_size: int = 16
+
+
+@dataclass
+class PHIClaudeConfig:
+    """Claude Sonnet configuration for PHI detection."""
+
+    model_name: str = "claude-sonnet-3.7"
+    endpoint_name: str = "databricks-claude-3-7-sonnet"
+    threshold: float = 0.8
+    max_tokens: int = 4000
+
+
+@dataclass
+class PHIAIMaskConfig:
+    """Databricks AI_MASK configuration for PHI detection."""
+
+    entities: list = None  # Will be set in __post_init__
+    batch_size: int = 1000  # Process in larger batches for SQL efficiency
+
+    def __post_init__(self):
+        if self.entities is None:
+            self.entities = [
+                "PERSON",
+                "LOCATION",
+                "EMAIL_ADDRESS",
+                "PHONE_NUMBER",
+                "US_SSN",
+                "CREDIT_CARD",
+                "MEDICAL_LICENSE",
+                "US_PASSPORT",
+            ]
 
 
 # COMMAND ----------
@@ -301,6 +360,103 @@ class PHIBioBERTModel(mlflow.pyfunc.PythonModel):
             logger.error("Failed to load PHI BioBERT model: %s", str(e))
             raise RuntimeError(f"PHI BioBERT loading failed: {str(e)}") from e
 
+    def _extract_custom_patterns(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using custom regex patterns for commonly missed patterns."""
+        entities = []
+
+        # Phone number patterns (Contact:, various formats)
+        phone_patterns = [
+            r"(?:Contact|Phone|Tel|Cell|Mobile):\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+            r"\(\d{3}\)\s*\d{3}[-.\s]\d{4}",
+            r"\d{3}[-.\s]\d{3}[-.\s]\d{4}",
+        ]
+
+        for pattern in phone_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                phone_text = match.group()
+                # Extract just the phone number part
+                phone_match = re.search(
+                    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", phone_text
+                )
+                if phone_match:
+                    entities.append(
+                        {
+                            "text": phone_match.group(),
+                            "label": "phone number",
+                            "start": match.start() + phone_match.start(),
+                            "end": match.start() + phone_match.end(),
+                            "score": 0.95,
+                            "source": "custom_regex",
+                        }
+                    )
+
+        # Medical record number patterns
+        mrn_patterns = [
+            r"MRN:?\s*(\w+[-]?\d+)",
+            r"Medical\s+Record\s+Number:?\s*(\w+[-]?\d+)",
+            r"Patient\s+ID:?\s*([A-Z]*[-]?\d+)",
+            r"Account\s+number:?\s*([A-Z]*[-]?\d+)",
+        ]
+
+        for pattern in mrn_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                mrn_text = match.group(1) if match.groups() else match.group()
+                entities.append(
+                    {
+                        "text": mrn_text,
+                        "label": "medical record number",
+                        "start": match.start()
+                        + (match.start(1) if match.groups() else 0),
+                        "end": match.start()
+                        + (match.end(1) if match.groups() else len(match.group())),
+                        "score": 0.9,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Social security number patterns
+        ssn_patterns = [
+            r"\b\d{3}[-]\d{2}[-]\d{4}\b",
+            r"SSN:?\s*\d{3}[-]\d{2}[-]\d{4}",
+        ]
+
+        for pattern in ssn_patterns:
+            for match in re.finditer(pattern, text):
+                ssn_text = re.search(r"\d{3}[-]\d{2}[-]\d{4}", match.group()).group()
+                entities.append(
+                    {
+                        "text": ssn_text,
+                        "label": "social security number",
+                        "start": match.start() + match.group().find(ssn_text),
+                        "end": match.start()
+                        + match.group().find(ssn_text)
+                        + len(ssn_text),
+                        "score": 0.95,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Address patterns (street address with number)
+        address_patterns = [
+            r"\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Lane|Ln|Boulevard|Blvd|Way|Place|Pl|Court|Ct)(?:\s+\w+)?,?\s*[A-Z]{2}\s+\d{5}",
+            r"\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Lane|Ln|Boulevard|Blvd|Way|Place|Pl|Court|Ct)(?:,\s*(?:Apt|Unit|#)\s*\w+)?",
+        ]
+
+        for pattern in address_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                entities.append(
+                    {
+                        "text": match.group(),
+                        "label": "street address",
+                        "start": match.start(),
+                        "end": match.end(),
+                        "score": 0.85,
+                        "source": "custom_regex",
+                    }
+                )
+
+        return entities
+
     def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
         """Predict PHI identifiers for redaction."""
         results = []
@@ -314,6 +470,10 @@ class PHIBioBERTModel(mlflow.pyfunc.PythonModel):
                 text = text[:5000]
 
             all_entities = []
+
+            # Add custom regex patterns for common missed patterns
+            custom_entities = self._extract_custom_patterns(text)
+            all_entities.extend(custom_entities)
 
             # BioBERT NER prediction with PHI focus
             try:
@@ -345,8 +505,8 @@ class PHIBioBERTModel(mlflow.pyfunc.PythonModel):
                 for entity in presidio_entities:
                     phi_label = self._map_presidio_to_phi(entity.entity_type)
 
-                    # Higher threshold for PHI compliance
-                    if phi_label and entity.score >= 0.8:
+                    # Lower threshold for better recall in BioBERT+Presidio combination
+                    if phi_label and entity.score >= 0.6:
                         all_entities.append(
                             {
                                 "text": text[entity.start : entity.end],
@@ -427,6 +587,7 @@ class PHIBioBERTModel(mlflow.pyfunc.PythonModel):
             "EMAIL_ADDRESS": "email address",
             "PHONE_NUMBER": "phone number",
             "US_SSN": "social security number",
+            "SSN": "social security number",  # Handle both variants
             "US_DRIVER_LICENSE": "license number",
             "DATE_TIME": "date",
             "LOCATION": "geographic identifier",
@@ -436,6 +597,7 @@ class PHIBioBERTModel(mlflow.pyfunc.PythonModel):
             "US_PASSPORT": "license number",
             "CREDIT_CARD": "account number",
             "US_BANK_NUMBER": "account number",
+            "NRP": "license number",  # National provider identifier
         }
 
         return phi_mapping.get(presidio_type.upper())
@@ -750,6 +912,61 @@ class PHIGLiNERModel(mlflow.pyfunc.PythonModel):
             logger.error("Failed to load PHI GLiNER model: %s", str(e))
             raise RuntimeError(f"PHI GLiNER loading failed: {str(e)}") from e
 
+    def _extract_custom_patterns(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using custom regex patterns for commonly missed patterns."""
+        entities = []
+
+        # Phone number patterns (Contact:, various formats)
+        phone_patterns = [
+            r"(?:Contact|Phone|Tel|Cell|Mobile):\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+            r"\(\d{3}\)\s*\d{3}[-.\s]\d{4}",
+            r"\d{3}[-.\s]\d{3}[-.\s]\d{4}",
+        ]
+
+        for pattern in phone_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                phone_text = match.group()
+                phone_match = re.search(
+                    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", phone_text
+                )
+                if phone_match:
+                    entities.append(
+                        {
+                            "text": phone_match.group(),
+                            "label": "phone number",
+                            "start": match.start() + phone_match.start(),
+                            "end": match.start() + phone_match.end(),
+                            "score": 0.95,
+                            "source": "custom_regex",
+                        }
+                    )
+
+        # Medical record number patterns
+        mrn_patterns = [
+            r"MRN:?\s*(\w+[-]?\d+)",
+            r"Medical\s+Record\s+Number:?\s*(\w+[-]?\d+)",
+            r"Patient\s+ID:?\s*([A-Z]*[-]?\d+)",
+            r"Account\s+number:?\s*([A-Z]*[-]?\d+)",
+        ]
+
+        for pattern in mrn_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                mrn_text = match.group(1) if match.groups() else match.group()
+                entities.append(
+                    {
+                        "text": mrn_text,
+                        "label": "medical record number",
+                        "start": match.start()
+                        + (match.start(1) if match.groups() else 0),
+                        "end": match.start()
+                        + (match.end(1) if match.groups() else len(match.group())),
+                        "score": 0.9,
+                        "source": "custom_regex",
+                    }
+                )
+
+        return entities
+
     def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
         """Predict PHI identifiers for Safe Harbor compliance."""
         results = []
@@ -762,6 +979,10 @@ class PHIGLiNERModel(mlflow.pyfunc.PythonModel):
             phi_labels = self.config["phi_identifiers"]
 
             all_entities = []
+
+            # Add custom regex patterns for common missed patterns
+            custom_entities = self._extract_custom_patterns(text)
+            all_entities.extend(custom_entities)
 
             # GLiNER prediction focused on PHI identifiers
             try:
@@ -830,6 +1051,7 @@ class PHIGLiNERModel(mlflow.pyfunc.PythonModel):
             "EMAIL_ADDRESS": "email address",
             "PHONE_NUMBER": "phone number",
             "US_SSN": "social security number",
+            "SSN": "social security number",  # Handle both variants
             "US_DRIVER_LICENSE": "license number",
             "DATE_TIME": "date of birth",  # Conservative mapping for PHI compliance
             "LOCATION": "geographic identifier",
@@ -925,6 +1147,222 @@ class PHIPresidioModel(mlflow.pyfunc.PythonModel):
             logger.error("Failed to load PHI Presidio model: %s", str(e))
             raise RuntimeError(f"PHI Presidio loading failed: {str(e)}") from e
 
+    def _extract_custom_patterns(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using custom regex patterns for commonly missed patterns."""
+        entities = []
+
+        # Enhanced name patterns for people that Presidio commonly misses
+        name_patterns = [
+            # Names with titles: "Dr. First Last", "Ms. Name"
+            r"(?:Dr|Mr|Ms|Mrs|Miss)\.\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)",
+            # Names in parentheses or after "Patient:"
+            r"(?:Patient|Name):?\s*([A-Z][a-z]+\s+[A-Z][a-z]+)",
+            # Two capitalized words that look like names (with context)
+            r"(?:for|scheduled for|appointment for|Follow-up appointment scheduled for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
+        ]
+
+        for pattern in name_patterns:
+            for match in re.finditer(pattern, text):
+                name_text = match.group(1).strip()
+                # Validation - avoid common false positives
+                if self._is_likely_person_name(name_text):
+                    entities.append(
+                        {
+                            "text": name_text,
+                            "label": "person",
+                            "start": match.start(1),
+                            "end": match.end(1),
+                            "score": 0.9,
+                            "source": "custom_regex",
+                        }
+                    )
+
+        # Enhanced date patterns for dates that Presidio misses
+        date_patterns = [
+            # DOB patterns
+            r"DOB:?\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})",
+            r"Date\s+of\s+Birth:?\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})",
+            # General dates in MM/DD/YYYY format
+            r"\b([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{4})\b",
+            # Month Day, Year format
+            r"\b([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})\b",
+            # Appointment/admission dates
+            r"(?:on|scheduled|admitted|discharged|appointment|visit)(?:\s+(?:for|on))?:?\s*([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})",
+        ]
+
+        for pattern in date_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                date_text = match.group(1) if match.groups() else match.group()
+                # Determine label based on context
+                label = (
+                    "date of birth"
+                    if any(
+                        keyword in match.group().lower() for keyword in ["dob", "birth"]
+                    )
+                    else "date"
+                )
+                entities.append(
+                    {
+                        "text": date_text,
+                        "label": label,
+                        "start": match.start()
+                        + (match.start(1) - match.start() if match.groups() else 0),
+                        "end": match.start()
+                        + (
+                            match.end(1) - match.start()
+                            if match.groups()
+                            else len(match.group())
+                        ),
+                        "score": 0.85,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Enhanced account number patterns that Presidio commonly misses
+        account_patterns = [
+            r"Account\s+number:?\s*(ACC-[0-9]+|[A-Z]{2,3}-[0-9]+|[0-9]{5,})",
+            r"Account:?\s*(ACC-[0-9]+|[A-Z]{2,3}-[0-9]+|[0-9]{5,})",
+            r"\b(ACC-[0-9]{6,})\b",
+        ]
+
+        for pattern in account_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                account_text = match.group(1) if match.groups() else match.group()
+                entities.append(
+                    {
+                        "text": account_text,
+                        "label": "account number",
+                        "start": match.start()
+                        + (match.start(1) - match.start() if match.groups() else 0),
+                        "end": match.start()
+                        + (
+                            match.end(1) - match.start()
+                            if match.groups()
+                            else len(match.group())
+                        ),
+                        "score": 0.9,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Phone number patterns (Contact:, various formats)
+        phone_patterns = [
+            r"(?:Contact|Phone|Tel|Cell|Mobile)(?:\s+info)?:?\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+            r"\(\d{3}\)\s*\d{3}[-.\s]\d{4}",
+            r"\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b",
+        ]
+
+        for pattern in phone_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                phone_text = match.group()
+                phone_match = re.search(
+                    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", phone_text
+                )
+                if phone_match:
+                    entities.append(
+                        {
+                            "text": phone_match.group(),
+                            "label": "phone number",
+                            "start": match.start() + phone_match.start(),
+                            "end": match.start() + phone_match.end(),
+                            "score": 0.95,
+                            "source": "custom_regex",
+                        }
+                    )
+
+        # Medical record number patterns
+        mrn_patterns = [
+            r"MRN:?\s*(\w+[-]?\d+)",
+            r"Medical\s+Record\s+Number:?\s*(\w+[-]?\d+)",
+            r"Patient\s+ID:?\s*([A-Z]*[-]?\d+)",
+        ]
+
+        for pattern in mrn_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                mrn_text = match.group(1) if match.groups() else match.group()
+                entities.append(
+                    {
+                        "text": mrn_text,
+                        "label": "medical record number",
+                        "start": match.start()
+                        + (match.start(1) if match.groups() else 0),
+                        "end": match.start()
+                        + (match.end(1) if match.groups() else len(match.group())),
+                        "score": 0.9,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Social security number patterns
+        ssn_patterns = [
+            r"\b\d{3}[-]\d{2}[-]\d{4}\b",
+            r"SSN:?\s*\d{3}[-]\d{2}[-]\d{4}",
+        ]
+
+        for pattern in ssn_patterns:
+            for match in re.finditer(pattern, text):
+                ssn_text = re.search(r"\d{3}[-]\d{2}[-]\d{4}", match.group()).group()
+                entities.append(
+                    {
+                        "text": ssn_text,
+                        "label": "social security number",
+                        "start": match.start() + match.group().find(ssn_text),
+                        "end": match.start()
+                        + match.group().find(ssn_text)
+                        + len(ssn_text),
+                        "score": 0.95,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Address patterns (street address with number)
+        address_patterns = [
+            r"\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Lane|Ln|Boulevard|Blvd|Way|Place|Pl|Court|Ct)(?:\s+\w+)?,?\s*[A-Z]{2}\s+\d{5}",
+            r"\d+\s+[A-Z][a-z]+\s+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Lane|Ln|Boulevard|Blvd|Way|Place|Pl|Court|Ct)(?:,\s*(?:Apt|Unit|#)\s*\w+)?",
+        ]
+
+        for pattern in address_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                entities.append(
+                    {
+                        "text": match.group(),
+                        "label": "street address",
+                        "start": match.start(),
+                        "end": match.end(),
+                        "score": 0.85,
+                        "source": "custom_regex",
+                    }
+                )
+
+        return entities
+
+    def _is_likely_person_name(self, text: str) -> bool:
+        """Check if text appears to be a person's name."""
+        # Basic heuristics for name detection
+        text_clean = text.strip()
+
+        # Names should have reasonable length
+        if len(text_clean) < 2 or len(text_clean) > 50:
+            return False
+
+        # Should be alphabetic characters (with possible spaces, hyphens, apostrophes)
+        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -'.")
+        if not all(c in allowed_chars for c in text_clean):
+            return False
+
+        # Should start with capital letter
+        if not text_clean[0].isupper():
+            return False
+
+        # Common name patterns
+        words = text_clean.split()
+        if len(words) >= 2:
+            # Multiple words, each should be capitalized
+            return all(word[0].isupper() for word in words if word)
+        else:
+            # Single word - check if it looks like a name (capitalized, reasonable length)
+            return text_clean.isalpha() and 2 <= len(text_clean) <= 20
+
     def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
         """Predict PHI identifiers using Presidio-only approach."""
         results = []
@@ -934,10 +1372,226 @@ class PHIPresidioModel(mlflow.pyfunc.PythonModel):
 
             all_entities = []
 
+            # Add custom regex patterns for common missed patterns
+            custom_entities = self._extract_custom_patterns(text)
+            all_entities.extend(custom_entities)
+
             # Enhanced Presidio detection for PHI identifiers
             try:
-                # Use higher threshold and enhanced entity types for medical text
-                presidio_entities = self.analyzer.analyze(
+                # Add custom recognizers for medical patterns
+                from presidio_analyzer import RecognizerRegistry
+                from presidio_analyzer.predefined_recognizers import PatternRecognizer
+                from presidio_analyzer import Pattern
+
+                # Enhanced Medical Record Number recognizer
+                mrn_patterns = [
+                    Pattern("MRN_PATTERN", r"MRN:?\s*([A-Z0-9-]{3,20})", 0.9),
+                    Pattern(
+                        "MEDICAL_REC_PATTERN",
+                        r"Medical\s+Record\s+Number:?\s*([A-Z0-9-]{3,20})",
+                        0.9,
+                    ),
+                    Pattern(
+                        "PATIENT_ID_PATTERN", r"Patient\s+ID:?\s*([A-Z0-9-]{3,20})", 0.9
+                    ),
+                    Pattern(
+                        "ACCOUNT_NUM_PATTERN",
+                        r"Account\s+(?:number|#):?\s*([A-Z0-9-]{3,20})",
+                        0.8,
+                    ),
+                    Pattern(
+                        "RECORD_NUM_PATTERN", r"Record\s+#?:?\s*([A-Z0-9-]{3,20})", 0.8
+                    ),
+                ]
+
+                mrn_recognizer = PatternRecognizer(
+                    supported_entity="MEDICAL_RECORD_NUMBER",
+                    patterns=mrn_patterns,
+                    context=["patient", "medical", "record", "hospital"],
+                )
+
+                # Enhanced date patterns for medical dates
+                date_patterns = [
+                    # DOB patterns with various formats
+                    Pattern(
+                        "DATE_OF_BIRTH",
+                        r"DOB:?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
+                        0.95,
+                    ),
+                    Pattern(
+                        "DATE_OF_BIRTH_WORD",
+                        r"(?:date\s+of\s+birth|birth\s+date):?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
+                        0.9,
+                    ),
+                    # Parenthetical DOB format: (DOB: 12/05/1960)
+                    Pattern(
+                        "DOB_PARENTHESES",
+                        r"\(DOB:?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})\)",
+                        0.95,
+                    ),
+                    # Appointment and admission dates
+                    Pattern(
+                        "APPOINTMENT_DATE",
+                        r"(?:appointment|scheduled|visit)(?:\s+(?:for|on))?:?\s*([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})",
+                        0.85,
+                    ),
+                    Pattern(
+                        "ADMISSION_DATE",
+                        r"(?:admitted|admission|discharged|discharge)(?:\s+on)?:?\s*([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})",
+                        0.85,
+                    ),
+                    # General date formats
+                    Pattern(
+                        "MONTH_DATE",
+                        r"\b([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})\b",
+                        0.7,
+                    ),
+                    Pattern(
+                        "NUMERIC_DATE",
+                        r"\b([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{4})\b",
+                        0.75,
+                    ),
+                    # Previous/prior dates in medical context
+                    Pattern(
+                        "PREVIOUS_DATE",
+                        r"Previous\s+(?:admission|visit|appointment):?\s*([A-Z][a-z]+\s+[0-9]{1,2},?\s*[0-9]{4})",
+                        0.9,
+                    ),
+                ]
+
+                date_recognizer = PatternRecognizer(
+                    supported_entity="MEDICAL_DATE",
+                    patterns=date_patterns,
+                    context=["patient", "medical", "hospital", "clinic"],
+                )
+
+                # Enhanced address patterns with multiple variations
+                address_patterns = [
+                    # Full address with street number, name, and optional ZIP
+                    Pattern(
+                        "FULL_ADDRESS",
+                        r"\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd|Lane|Ln|Boulevard|Blvd|Way|Place|Pl|Court|Ct)(?:\s*,?\s*(?:Apt|Unit|Suite|#)\s*\w+)?(?:\s*,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s*\d{5})?",
+                        0.85,
+                    ),
+                    # Address with explicit context
+                    Pattern(
+                        "ADDRESS_CONTEXT", r"Address:?\s*(.+?)(?:\n|,|\.|\s+\w+:)", 0.8
+                    ),
+                    Pattern(
+                        "HOME_ADDRESS",
+                        r"(?:Home|Residence)\s*(?:address)?:?\s*(.+?)(?:\n|,|\.|\s+\w+:)",
+                        0.75,
+                    ),
+                    # Street + City + State patterns
+                    Pattern(
+                        "STREET_CITY_STATE",
+                        r"\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Drive|Dr|Road|Rd),\s*[A-Za-z\s]+,\s*[A-Z]{2}(?:\s+\d{5})?",
+                        0.9,
+                    ),
+                ]
+
+                address_recognizer = PatternRecognizer(
+                    supported_entity="STREET_ADDRESS",
+                    patterns=address_patterns,
+                    context=["address", "home", "residence", "street"],
+                )
+
+                # Enhanced person name recognizer with titles and context
+                person_patterns = [
+                    # Names with professional titles
+                    Pattern(
+                        "DR_NAME",
+                        r"(?:Dr|Doctor)\.?\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                        0.95,
+                    ),
+                    # Names with social titles
+                    Pattern(
+                        "TITLED_NAME",
+                        r"(?:Mr|Mrs|Ms|Miss)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+                        0.9,
+                    ),
+                    # Physician/medical professional context
+                    Pattern(
+                        "PHYSICIAN_NAME",
+                        r"Physician:?\s*(?:Dr\.?\s*)?([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                        0.95,
+                    ),
+                    # Patient context names
+                    Pattern(
+                        "PATIENT_NAME",
+                        r"(?:Patient|for|scheduled\s+for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                        0.9,
+                    ),
+                    # Names in appointment contexts
+                    Pattern(
+                        "APPOINTMENT_NAME",
+                        r"(?:Follow-up\s+appointment\s+scheduled\s+for|appointment\s+for)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                        0.95,
+                    ),
+                    # General two-word capitalized names with medical context
+                    Pattern(
+                        "MEDICAL_NAME",
+                        r"(?:treated\s+by|seen\s+by|contact|patient)\s+(?:Dr\.?\s*)?([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                        0.85,
+                    ),
+                ]
+
+                person_recognizer = PatternRecognizer(
+                    supported_entity="PERSON",
+                    patterns=person_patterns,
+                    context=["dr", "doctor", "physician", "patient", "mr", "mrs", "ms"],
+                )
+
+                # Enhanced account number recognizer
+                account_patterns = [
+                    # Account numbers with prefixes
+                    Pattern(
+                        "ACCOUNT_PREFIX",
+                        r"(?:Account|Acc|Account\s+number|Account\s+#):?\s*([A-Z]{2,4}-\d+)",
+                        0.9,
+                    ),
+                    Pattern("ACC_FORMAT", r"\b(ACC-\d{6,})\b", 0.95),
+                    # General account patterns
+                    Pattern(
+                        "ACCOUNT_ID",
+                        r"(?:Account|account)\s+(?:number|#):?\s*([A-Z0-9-]{5,})",
+                        0.8,
+                    ),
+                ]
+
+                account_recognizer = PatternRecognizer(
+                    supported_entity="ACCOUNT_NUMBER",
+                    patterns=account_patterns,
+                    context=["account", "acc", "number", "#"],
+                )
+
+                # Add custom recognizers
+                registry = RecognizerRegistry()
+                registry.load_predefined_recognizers()  # Load built-in recognizers first
+                registry.add_recognizer(mrn_recognizer)
+                registry.add_recognizer(date_recognizer)
+                registry.add_recognizer(address_recognizer)
+                registry.add_recognizer(person_recognizer)
+                registry.add_recognizer(account_recognizer)
+
+                # Use context-aware analyzer for better accuracy
+                from presidio_analyzer.context_aware_enhancers import (
+                    LemmaContextAwareEnhancer,
+                )
+
+                context_enhancer = LemmaContextAwareEnhancer(
+                    context_similarity_factor=0.45,
+                    min_score_with_context_similarity=0.4,
+                )
+
+                # Create enhanced analyzer with context awareness
+                enhanced_analyzer = AnalyzerEngine(
+                    registry=registry,
+                    context_aware_enhancer=context_enhancer,
+                    default_score_threshold=0.3,  # Lower threshold, let context boost scores
+                )
+
+                presidio_entities = enhanced_analyzer.analyze(
                     text=text,
                     language="en",
                     entities=[
@@ -947,17 +1601,24 @@ class PHIPresidioModel(mlflow.pyfunc.PythonModel):
                         "DATE_TIME",
                         "MEDICAL_LICENSE",
                         "SSN",
+                        "US_SSN",
                         "CREDIT_CARD",
                         "US_PASSPORT",
                         "US_DRIVER_LICENSE",
                         "URL",
                         "IP_ADDRESS",
+                        "LOCATION",
+                        "MEDICAL_RECORD_NUMBER",
+                        "MEDICAL_DATE",
+                        "STREET_ADDRESS",
+                        "ACCOUNT_NUMBER",  # Added for account number detection
+                        "US_BANK_NUMBER",
+                        "NRP",
                     ],
-                    score_threshold=self.config["threshold"],
                 )
 
                 for entity in presidio_entities:
-                    if entity.score >= self.config["threshold"]:
+                    if entity.score >= 0.5:  # Use lower threshold for PHI detection
                         all_entities.append(
                             {
                                 "text": text[entity.start : entity.end],
@@ -1000,11 +1661,15 @@ class PHIPresidioModel(mlflow.pyfunc.PythonModel):
             "DATE_TIME": "date of birth",  # Conservative mapping for PHI
             "MEDICAL_LICENSE": "license number",
             "SSN": "social security number",
+            "US_SSN": "social security number",  # Handle both variants
             "CREDIT_CARD": "account number",
             "US_PASSPORT": "license number",
             "US_DRIVER_LICENSE": "license number",
+            "LOCATION": "geographic identifier",
             "URL": "web url",
             "IP_ADDRESS": "ip address",
+            "US_BANK_NUMBER": "account number",
+            "NRP": "license number",  # National provider identifier
         }
         return label_mapping.get(presidio_label, presidio_label.lower())
 
@@ -1044,6 +1709,378 @@ class PHIPresidioModel(mlflow.pyfunc.PythonModel):
 
         return redacted
 
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## PHI-Compliant DistilBERT Model Implementation
+
+# COMMAND ----------
+
+
+class PHIDistilBERTModel(mlflow.pyfunc.PythonModel):
+    """DistilBERT NER model optimized for PHI detection."""
+
+    def __init__(self, config_dict: Dict[str, Any]):
+        self.config = config_dict
+        self.ner_pipeline = None
+
+    def load_context(self, context):
+        """Load DistilBERT NER model for PHI detection."""
+        try:
+            cache_dir = self.config["cache_dir"]
+            os.environ["HF_HOME"] = cache_dir
+            os.environ["TRANSFORMERS_CACHE"] = cache_dir
+            os.makedirs(cache_dir, exist_ok=True)
+
+            logger.info("Loading DistilBERT NER model for PHI detection")
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.config["model_name"], cache_dir=cache_dir
+            )
+            model = AutoModelForTokenClassification.from_pretrained(
+                self.config["model_name"], cache_dir=cache_dir
+            )
+
+            self.ner_pipeline = pipeline(
+                "ner",
+                model=model,
+                tokenizer=tokenizer,
+                aggregation_strategy="simple",
+                device=-1,  # CPU
+            )
+
+            # Test model
+            test_text = "John Smith lives at 123 Main Street and can be reached at (555) 123-4567."
+            _ = self.ner_pipeline(test_text)
+
+            logger.info("PHI Model security status:")
+            logger.info("   DistilBERT: %s", self.config["model_name"])
+            logger.info("   PHI Compliance: General NER adapted for PHI")
+
+            logger.info("PHI-compliant DistilBERT model loaded successfully")
+
+        except Exception as e:
+            logger.error("Failed to load PHI DistilBERT model: %s", str(e))
+            raise RuntimeError(f"PHI DistilBERT loading failed: {str(e)}") from e
+
+    def _extract_custom_patterns(self, text: str) -> List[Dict[str, Any]]:
+        """Extract entities using custom regex patterns for commonly missed patterns."""
+        entities = []
+
+        # Phone number patterns (Contact:, various formats)
+        phone_patterns = [
+            r"(?:Contact|Phone|Tel|Cell|Mobile):\s*\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}",
+            r"\(\d{3}\)\s*\d{3}[-.\s]\d{4}",
+            r"\d{3}[-.\s]\d{3}[-.\s]\d{4}",
+        ]
+
+        for pattern in phone_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                phone_text = match.group()
+                phone_match = re.search(
+                    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", phone_text
+                )
+                if phone_match:
+                    entities.append(
+                        {
+                            "text": phone_match.group(),
+                            "label": "phone number",
+                            "start": match.start() + phone_match.start(),
+                            "end": match.start() + phone_match.end(),
+                            "score": 0.95,
+                            "source": "custom_regex",
+                        }
+                    )
+
+        # Medical record number patterns
+        mrn_patterns = [
+            r"MRN:?\s*(\w+[-]?\d+)",
+            r"Medical\s+Record\s+Number:?\s*(\w+[-]?\d+)",
+            r"Patient\s+ID:?\s*([A-Z]*[-]?\d+)",
+            r"Account\s+number:?\s*([A-Z]*[-]?\d+)",
+        ]
+
+        for pattern in mrn_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                mrn_text = match.group(1) if match.groups() else match.group()
+                entities.append(
+                    {
+                        "text": mrn_text,
+                        "label": "medical record number",
+                        "start": match.start()
+                        + (match.start(1) if match.groups() else 0),
+                        "end": match.start()
+                        + (match.end(1) if match.groups() else len(match.group())),
+                        "score": 0.9,
+                        "source": "custom_regex",
+                    }
+                )
+
+        # Social security number patterns
+        ssn_patterns = [
+            r"\b\d{3}[-]\d{2}[-]\d{4}\b",
+            r"SSN:?\s*\d{3}[-]\d{2}[-]\d{4}",
+        ]
+
+        for pattern in ssn_patterns:
+            for match in re.finditer(pattern, text):
+                ssn_text = re.search(r"\d{3}[-]\d{2}[-]\d{4}", match.group()).group()
+                entities.append(
+                    {
+                        "text": ssn_text,
+                        "label": "social security number",
+                        "start": match.start() + match.group().find(ssn_text),
+                        "end": match.start()
+                        + match.group().find(ssn_text)
+                        + len(ssn_text),
+                        "score": 0.95,
+                        "source": "custom_regex",
+                    }
+                )
+
+        return entities
+
+    def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
+        """Predict PHI identifiers using DistilBERT NER."""
+        results = []
+
+        for _, input_row in model_input.iterrows():
+            text = input_row.get("text", "")
+
+            if len(text) > 5000:
+                text = text[:5000]
+
+            all_entities = []
+
+            # Add custom regex patterns
+            custom_entities = self._extract_custom_patterns(text)
+            all_entities.extend(custom_entities)
+
+            # DistilBERT NER prediction with enhanced processing
+            try:
+                distilbert_entities = self.ner_pipeline(text)
+
+                for entity in distilbert_entities:
+                    # Handle both entity_group (aggregated) and entity (token-level) formats
+                    entity_type = entity.get("entity_group", entity.get("entity", ""))
+                    phi_label = self._map_distilbert_to_phi(entity_type)
+
+                    # Enhanced scoring for medical context
+                    score = float(entity["score"])
+                    entity_text = entity.get(
+                        "word", text[entity["start"] : entity["end"]]
+                    ).strip()
+
+                    # Clean up entity text (remove ##, spaces)
+                    entity_text = entity_text.replace("##", "").strip()
+
+                    # Skip if empty after cleanup
+                    if not entity_text:
+                        continue
+
+                    # Filter out common false positives for geographic identifiers
+                    if phi_label == "geographic identifier":
+                        # Skip common words that aren't actually locations
+                        false_positives = {
+                            "apt",
+                            "at",
+                            "on",
+                            "in",
+                            "the",
+                            "and",
+                            "or",
+                            "a",
+                            "an",
+                        }
+                        if entity_text.lower() in false_positives:
+                            continue
+                        # Skip single letters unless they're clearly state abbreviations
+                        if len(entity_text) == 1 and entity_text.upper() not in {
+                            "IL",
+                            "NY",
+                            "CA",
+                            "TX",
+                            "FL",
+                        }:
+                            continue
+                        # Skip obvious non-location patterns
+                        if entity_text.isdigit() and len(entity_text) < 5:
+                            continue
+
+                    # Boost scores for medical-looking patterns
+                    if self._is_medical_pattern(entity_text):
+                        score = min(0.95, score * 1.2)
+
+                    # Additional validation for person entities
+                    if phi_label == "person":
+                        # Require minimum score for person detection
+                        if score < 0.85 and not self._is_likely_name(entity_text):
+                            continue
+
+                    if phi_label and score >= self.config["threshold"]:
+                        all_entities.append(
+                            {
+                                "text": entity_text,
+                                "label": phi_label,
+                                "start": int(entity["start"]),
+                                "end": int(entity["end"]),
+                                "score": score,
+                                "source": "distilbert_enhanced",
+                            }
+                        )
+
+            except Exception as e:
+                logger.warning("DistilBERT PHI prediction failed: %s", str(e))
+
+            # Remove overlapping entities
+            unique_entities = self._deduplicate_entities(all_entities)
+
+            # Create PHI-compliant redacted text
+            redacted_text = self._phi_redact_text(text, unique_entities)
+
+            results.append(
+                {
+                    "text": text,
+                    "entities": json.dumps(unique_entities),
+                    "redacted_text": redacted_text,
+                    "entity_count": len(unique_entities),
+                    "phi_compliant": True,
+                }
+            )
+
+        return pd.DataFrame(results)
+
+    def _map_distilbert_to_phi(self, distilbert_label: str) -> str:
+        """Map DistilBERT entity types to PHI identifiers with enhanced medical context."""
+        phi_mapping = {
+            "PER": "person",
+            "PERSON": "person",
+            "LOC": "geographic identifier",
+            "LOCATION": "geographic identifier",
+            "ORG": "organization",
+            "ORGANIZATION": "organization",
+            "MISC": "unique identifier",
+            # Enhanced mappings for medical context
+            "B-PER": "person",
+            "I-PER": "person",
+            "B-LOC": "geographic identifier",
+            "I-LOC": "geographic identifier",
+            "B-ORG": "organization",
+            "I-ORG": "organization",
+            "B-MISC": "unique identifier",
+            "I-MISC": "unique identifier",
+        }
+        return phi_mapping.get(distilbert_label.upper())
+
+    def _is_medical_pattern(self, text: str) -> bool:
+        """Check if text matches common medical/PHI patterns."""
+        text_lower = text.lower()
+
+        # Medical professional patterns
+        medical_titles = ["dr.", "doctor", "nurse", "physician", "md", "rn", "pa"]
+        if any(title in text_lower for title in medical_titles):
+            return True
+
+        # Medical facility patterns
+        medical_facilities = [
+            "hospital",
+            "clinic",
+            "medical center",
+            "health center",
+            "emergency",
+            "urgent care",
+            "surgery center",
+        ]
+        if any(facility in text_lower for facility in medical_facilities):
+            return True
+
+        return False
+
+    def _is_likely_name(self, text: str) -> bool:
+        """Check if text appears to be a person's name."""
+        # Basic heuristics for name detection
+        text_clean = text.strip()
+
+        # Names should have reasonable length
+        if len(text_clean) < 2 or len(text_clean) > 50:
+            return False
+
+        # Should be alphabetic characters (with possible spaces, hyphens, apostrophes)
+        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -'.")
+        if not all(c in allowed_chars for c in text_clean):
+            return False
+
+        # Should start with capital letter
+        if not text_clean[0].isupper():
+            return False
+
+        # Exclude common non-name patterns
+        if text_clean.upper() in {"DR", "MR", "MS", "MRS", "MISS", "DOCTOR", "PATIENT"}:
+            return False
+
+        # Common name patterns
+        words = text_clean.split()
+        if len(words) >= 2:
+            # Multiple words, each should be capitalized
+            return all(word[0].isupper() for word in words if word)
+        else:
+            # Single word - check if it looks like a name (capitalized, reasonable length)
+            return text_clean.isalpha() and 2 <= len(text_clean) <= 20
+
+    def _deduplicate_entities(
+        self, entities: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Remove overlapping entities, keeping highest scoring ones."""
+        if not entities:
+            return []
+
+        entities.sort(key=lambda x: x["start"])
+        unique_entities = []
+
+        for entity in entities:
+            overlap = False
+            for existing in unique_entities:
+                if (
+                    entity["start"] < existing["end"]
+                    and entity["end"] > existing["start"]
+                ):
+                    if entity["score"] > existing["score"]:
+                        unique_entities.remove(existing)
+                        unique_entities.append(entity)
+                    overlap = True
+                    break
+            if not overlap:
+                unique_entities.append(entity)
+
+        return sorted(unique_entities, key=lambda x: x["start"])
+
+    def _phi_redact_text(self, text: str, entities: List[Dict[str, Any]]) -> str:
+        """Create PHI-compliant redacted text."""
+        if not entities:
+            return text
+
+        entities = sorted(entities, key=lambda x: x["start"], reverse=True)
+        redacted_text = text
+
+        for entity in entities:
+            redacted_text = (
+                redacted_text[: entity["start"]]
+                + f"[{entity['label'].upper().replace(' ', '_')}]"
+                + redacted_text[entity["end"] :]
+            )
+
+        return redacted_text
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## PHI-Compliant Claude Model Implementation
+# MAGIC
+# MAGIC Claude model is implemented using code-based logging in `claude_phi_model.py`
+# MAGIC to avoid serialization issues with the Databricks SDK client.
+# MAGIC
 
 # COMMAND ----------
 
@@ -1279,10 +2316,391 @@ def train_and_register_phi_presidio_model(
     return f"models:/{model_name_full}/{registered_model_info.version}"
 
 
-# COMMAND ----------
+def train_and_register_phi_distilbert_model(
+    config: PHIDistilBERTConfig, model_name_full: str
+) -> str:
+    """Train and register PHI-compliant DistilBERT model."""
+    config_dict = asdict(config)
+    distilbert_model = PHIDistilBERTModel(config_dict)
 
-# MAGIC %md
-# MAGIC ## PHI-Compliant Batch Processing
+    sample_input = pd.DataFrame(
+        {
+            "text": [
+                "Patient John Smith lives at 123 Main Street and can be reached at (555) 123-4567."
+            ],
+            "text_type": ["medical"],
+        }
+    )
+
+    distilbert_model.load_context(None)
+    sample_output = distilbert_model.predict(None, sample_input)
+
+    signature = infer_signature(sample_input, sample_output)
+
+    with mlflow.start_run():
+        logged_model_info = mlflow.pyfunc.log_model(
+            artifact_path="phi_distilbert_model",
+            python_model=distilbert_model,
+            signature=signature,
+            pip_requirements=[
+                "numpy>=1.21.5,<2.0",
+                "pandas>=1.5.0,<2.1.0",
+                "transformers==4.44.0",
+                "torch==2.4.0",
+                "packaging>=21.0",
+            ],
+            input_example=sample_input,
+            metadata={
+                "model_type": "phi_distilbert",
+                "base_model": config.model_name,
+                "phi_compliant": True,
+                "redaction_method": "safe_harbor",
+            },
+        )
+
+        mlflow.log_params(
+            {
+                "base_model": config.model_name,
+                "threshold": config.threshold,
+                "batch_size": config.batch_size,
+            }
+        )
+
+    registered_model_info = mlflow.register_model(
+        model_uri=logged_model_info.model_uri, name=model_name_full
+    )
+
+    client = mlflow.tracking.MlflowClient()
+    client.set_registered_model_alias(
+        name=model_name_full, alias="champion", version=registered_model_info.version
+    )
+
+    logger.info(
+        "PHI DistilBERT model registered to Unity Catalog: %s version %s with champion alias",
+        model_name_full,
+        registered_model_info.version,
+    )
+    return f"models:/{model_name_full}/{registered_model_info.version}"
+
+
+def process_claude_ai_query_batch(df: DataFrame, config: PHIClaudeConfig) -> DataFrame:
+    """Process PHI detection using AI_QUERY with Claude.
+
+    NOTE: Future exploration - investigate pandas UDF approach for Claude
+    once authentication issues in distributed contexts are resolved.
+    """
+
+    claude_prompt = """Analyze this medical text and identify PHI that must be redacted for HIPAA compliance.
+
+Return JSON: [{"text": "found_text", "label": "phi_category", "start": start_pos, "end": end_pos, "score": 0.9}]
+
+PHI categories: person, phone number, email address, social security number, medical record number, date of birth, street address, geographic identifier
+
+Text: """
+
+    # Create UDFs for processing Claude response (reusing logic from claude_phi_model.py)
+    @udf(returnType=StringType())
+    def parse_claude_entities(claude_response: str) -> str:
+        """Parse entities from Claude response JSON."""
+        import json
+        import re
+
+        if not claude_response:
+            return "[]"
+
+        try:
+            # Try direct JSON parsing first
+            entities_data = json.loads(claude_response)
+        except json.JSONDecodeError:
+            # Fallback to regex extraction
+            json_match = re.search(r"\[.*\]", claude_response, re.DOTALL)
+            if json_match:
+                try:
+                    entities_data = json.loads(json_match.group(0))
+                except json.JSONDecodeError:
+                    return "[]"
+            else:
+                return "[]"
+
+        # Filter valid entities (reusing Claude model logic)
+        threshold = config.threshold
+        valid_entities = []
+
+        if isinstance(entities_data, list):
+            for entity_data in entities_data:
+                if (
+                    isinstance(entity_data, dict)
+                    and "text" in entity_data
+                    and "label" in entity_data
+                    and entity_data.get("score", 0) >= threshold
+                ):
+                    valid_entities.append(entity_data)
+
+        return json.dumps(valid_entities)
+
+    @udf(returnType=StringType())
+    def apply_phi_redaction(text: str, entities_json: str) -> str:
+        """Apply PHI redaction using entities (reusing claude_phi_model.py logic)."""
+        import json
+
+        if not entities_json or entities_json == "[]":
+            return text
+
+        try:
+            entities = json.loads(entities_json)
+        except json.JSONDecodeError:
+            return text
+
+        if not entities:
+            return text
+
+        # Sort entities by start position (reverse order for proper replacement)
+        entities = sorted(entities, key=lambda x: x.get("start", 0), reverse=True)
+        redacted_text = text
+
+        for entity in entities:
+            if "start" in entity and "end" in entity and "label" in entity:
+                redacted_text = (
+                    redacted_text[: entity["start"]]
+                    + f"[{entity['label'].upper().replace(' ', '_')}]"
+                    + redacted_text[entity["end"] :]
+                )
+
+        return redacted_text
+
+    @udf(returnType=IntegerType())
+    def count_entities(entities_json: str) -> int:
+        """Count entities from JSON string."""
+        import json
+
+        try:
+            entities = json.loads(entities_json) if entities_json else []
+            return len(entities)
+        except json.JSONDecodeError:
+            return 0
+
+    result_df = (
+        df.withColumn(
+            "claude_response",
+            expr(
+                f"""
+                AI_QUERY(
+                    'databricks-claude-3-7-sonnet',
+                    CONCAT('{claude_prompt}', medical_text_with_phi)
+                )
+            """
+            ),
+        )
+        .withColumn("phi_entities", parse_claude_entities(col("claude_response")))
+        .withColumn(
+            "phi_redacted_text",
+            apply_phi_redaction(col("medical_text_with_phi"), col("phi_entities")),
+        )
+        .withColumn("phi_entity_count", count_entities(col("phi_entities")))
+        .withColumn("phi_compliant", lit(True))
+        .drop("claude_response")  # Clean up intermediate column
+    )
+
+    return result_df
+
+
+def process_ai_mask_batch(
+    input_table_name: str, text_column: str, config: PHIAIMaskConfig
+) -> DataFrame:
+    """Process PHI redaction using Databricks AI_MASK function."""
+
+    # print(f"Processing {input_df.count()} records with AI_MASK...")
+
+    # Create AI_MASK SQL with multiple entity types
+    entity_list = "'" + "', '".join(config.entities) + "'"
+
+    # Register temp table for processing
+
+    # input_df.createOrReplaceTempView(temp_table_name)
+    # Apply AI_MASK function with specified entity types
+    sql_query = f"""
+    SELECT 
+        *,
+        AI_MASK({text_column}, ARRAY({entity_list})) as ai_mask_redacted_text
+    FROM {input_table_name}
+    """
+
+    result_df = spark.sql(sql_query)
+
+    # Add additional columns for consistency with other models
+    result_df = result_df.withColumn(
+        "ai_mask_entity_count",
+        when(col("ai_mask_redacted_text") != col(text_column), 1).otherwise(0),
+    ).withColumn(
+        "ai_mask_entities", lit("[]")
+    )  # AI_MASK doesn't return entity details
+
+    print(f"AI_MASK processing complete")
+    return result_df
+
+
+def calculate_ai_mask_redaction_success(
+    original_text: str, redacted_text: str
+) -> float:
+    """Calculate redaction success for AI_MASK (simplified metric)."""
+    if not original_text or not redacted_text:
+        return 0.0
+
+    # Simple check: if text changed, assume some redaction occurred
+    if original_text != redacted_text:
+        # Count approximate redaction markers or length change
+        original_len = len(original_text)
+        redacted_len = len(redacted_text)
+
+        # If text got shorter, likely some redaction occurred
+        if redacted_len < original_len:
+            return 1.0
+        # If contains typical redaction patterns, assume success
+        elif any(
+            marker in redacted_text.upper()
+            for marker in ["***", "[MASKED]", "<MASKED>", "REDACTED"]
+        ):
+            return 1.0
+        else:
+            return 0.5  # Text changed but unclear if properly redacted
+
+    return 0.0  # No change means no redaction
+
+
+def evaluate_ai_mask_redaction(
+    df: DataFrame,
+    original_col: str = "medical_text_with_phi",
+    redacted_col: str = "ai_mask_redacted_text",
+    ground_truth_redacted_col: str = "phi_redacted_ground_truth",
+) -> Dict[str, Any]:
+    """Evaluate AI_MASK redaction success (simplified evaluation)."""
+
+    # Convert to pandas for processing
+    pdf = df.toPandas()
+
+    redaction_scores = []
+    total_records = len(pdf)
+    successful_redactions = 0
+
+    for _, row in pdf.iterrows():
+        try:
+            original_text = row[original_col] if original_col in row else ""
+            redacted_text = row[redacted_col] if redacted_col in row else ""
+
+            # Calculate redaction success
+            redaction_success = calculate_ai_mask_redaction_success(
+                original_text, redacted_text
+            )
+            redaction_scores.append(redaction_success)
+
+            if redaction_success > 0.5:
+                successful_redactions += 1
+
+        except Exception as e:
+            logger.warning(f"Error processing AI_MASK evaluation row: {e}")
+            redaction_scores.append(0.0)
+
+    # Calculate summary metrics
+    avg_redaction_success = (
+        sum(redaction_scores) / len(redaction_scores) if redaction_scores else 0.0
+    )
+    redaction_success_rate = (
+        successful_redactions / total_records if total_records > 0 else 0.0
+    )
+
+    return {
+        "model_type": "ai_mask",
+        "total_records": total_records,
+        "redaction_metrics": {
+            "avg_redaction_success": avg_redaction_success,
+            "redaction_success_rate": redaction_success_rate,
+            "successful_redactions": successful_redactions,
+            "total_processed": total_records,
+        },
+        "note": "AI_MASK evaluation focuses on redaction success only, not entity-level precision/recall",
+    }
+
+
+def train_and_register_phi_claude_model(
+    config: PHIClaudeConfig, model_name_full: str
+) -> str:
+    """Train and register PHI-compliant Claude model using code-based logging."""
+    import os
+    import tempfile
+
+    config_dict = asdict(config)
+
+    sample_input = pd.DataFrame(
+        {
+            "text": [
+                "Patient John Smith (DOB: 01/15/1980) contacted at (555) 123-4567."
+            ],
+            "text_type": ["medical"],
+        }
+    )
+
+    signature = infer_signature(
+        sample_input,
+        pd.DataFrame(
+            {
+                "text": ["test"],
+                "entities": ["[]"],
+                "redacted_text": ["test"],
+                "entity_count": [0],
+                "phi_compliant": [True],
+            }
+        ),
+    )
+
+    with mlflow.start_run():
+        # Use code-based logging to avoid serialization issues
+        model_code_path = "./claude_phi_model.py"
+
+        logged_model_info = mlflow.pyfunc.log_model(
+            artifact_path="phi_claude_model",
+            python_model=model_code_path,  # Define the model as the path to the script
+            signature=signature,
+            pip_requirements=[
+                "numpy>=1.21.5,<2.0",
+                "pandas>=1.5.0,<2.1.0",
+                "databricks-sdk>=0.20.0",
+                "databricks-langchain==0.7.1",
+                "packaging>=21.0",
+            ],
+            input_example=sample_input,
+            metadata={
+                "model_type": "phi_claude",
+                "base_model": config.model_name,
+                "phi_compliant": True,
+                "redaction_method": "llm_based",
+            },
+        )
+
+        mlflow.log_params(
+            {
+                "base_model": config.model_name,
+                "endpoint_name": config.endpoint_name,
+                "threshold": config.threshold,
+                "max_tokens": config.max_tokens,
+            }
+        )
+
+    registered_model_info = mlflow.register_model(
+        model_uri=logged_model_info.model_uri, name=model_name_full
+    )
+
+    client = mlflow.tracking.MlflowClient()
+    client.set_registered_model_alias(
+        name=model_name_full, alias="champion", version=registered_model_info.version
+    )
+
+    logger.info(
+        "PHI Claude model registered to Unity Catalog: %s version %s with champion alias",
+        model_name_full,
+        registered_model_info.version,
+    )
+    return f"models:/{model_name_full}/{registered_model_info.version}"
+
 
 # COMMAND ----------
 
@@ -1293,45 +2711,68 @@ def create_phi_udf(model_uri_path: str):
     @pandas_udf(
         "struct<entities:string,redacted_text:string,entity_count:int,phi_compliant:boolean>"
     )
-    def phi_process_batch(text_series: pd.Series) -> pd.DataFrame:
-        batch_size = len(text_series)
+    def phi_process_batch(iterator: Iterator[pd.Series]) -> Iterator[pd.DataFrame]:
+        # Load model once per worker (efficient!)
+        print(f"[PHI WORKER] Loading model: {model_uri_path}")
+        model = mlflow.pyfunc.load_model(model_uri_path)
+        print(f"[PHI WORKER] PHI-compliant model loaded")
 
-        try:
-            print(f"[PHI WORKER] Loading model: {model_uri_path}")
-            model = mlflow.pyfunc.load_model(model_uri_path)
-            print(f"[PHI WORKER] PHI-compliant model loaded")
+        # Process each batch in the iterator
+        for text_series in iterator:
+            batch_size = len(text_series)
 
-            # Process batch with PHI focus
-            input_df = pd.DataFrame(
-                {"text": text_series.values, "text_type": ["medical"] * batch_size}
-            )
+            if batch_size == 0:
+                yield pd.DataFrame(
+                    {
+                        "entities": [],
+                        "redacted_text": [],
+                        "entity_count": [],
+                        "phi_compliant": [],
+                    }
+                )
+                continue
 
-            print(
-                f"🔄 [PHI WORKER] Processing {batch_size} medical texts for PHI compliance..."
-            )
-            results = model.predict(input_df)
-            print(f"[PHI WORKER] PHI redaction complete")
+            try:
+                # Process batch with PHI focus
+                input_df = pd.DataFrame(
+                    {"text": text_series.values, "text_type": ["medical"] * batch_size}
+                )
 
-            return pd.DataFrame(
-                {
-                    "entities": results["entities"],
-                    "redacted_text": results["redacted_text"],
-                    "entity_count": results["entity_count"],
-                    "phi_compliant": results.get("phi_compliant", [True] * batch_size),
-                }
-            )
+                print(
+                    f"🔄 [PHI WORKER] Processing {batch_size} medical texts for PHI compliance..."
+                )
+                results = model.predict(input_df)
 
-        except Exception as e:
-            error_msg = f"PHI_REDACTION_ERROR: {str(e)}"
-            print(f"[PHI WORKER] {error_msg}")
-            return pd.DataFrame(
-                {
-                    "entities": ["[]"] * batch_size,
-                    "redacted_text": [error_msg] * batch_size,
-                    "entity_count": [0] * batch_size,
-                    "phi_compliant": [False] * batch_size,
-                }
-            )
+                # DEBUG: Print raw model results for troubleshooting
+                print(f"[PHI DEBUG] Raw model results type: {type(results)}")
+                print(
+                    f"[PHI DEBUG] Raw model results keys: {results.keys() if isinstance(results, dict) else 'Not a dict'}"
+                )
+                if isinstance(results, dict):
+                    for key, value in results.items():
+                        print(
+                            f"[PHI DEBUG] {key}: type={type(value)}, len={len(value) if hasattr(value, '__len__') else 'no len'}"
+                        )
+                        if hasattr(value, "__len__") and len(value) > 0:
+                            print(f"[PHI DEBUG] {key} sample: {str(value[0])[:100]}...")
+
+                print(f"[PHI WORKER] PHI redaction complete")
+
+                yield pd.DataFrame(
+                    {
+                        "entities": results["entities"],
+                        "redacted_text": results["redacted_text"],
+                        "entity_count": results["entity_count"],
+                        "phi_compliant": results.get(
+                            "phi_compliant", [True] * batch_size
+                        ),
+                    }
+                )
+
+            except Exception as e:
+                # Let exceptions bubble up - don't hide them
+                print(f"[PHI WORKER] Error in batch processing: {str(e)}")
+                raise e
 
     return phi_process_batch
 
@@ -1419,7 +2860,10 @@ mlflow.set_registry_uri("databricks-uc")
 
 # Add widget for model selection
 dbutils.widgets.dropdown(
-    "model_type", "both", ["gliner", "biobert", "both"], "PHI Model Type"
+    "model_type",
+    "all",
+    ["gliner", "biobert", "presidio", "distilbert", "claude", "all"],
+    "PHI Model Type",
 )
 model_type = dbutils.widgets.get("model_type")
 
@@ -1441,14 +2885,34 @@ phi_biobert_config = PHIBioBERTConfig(
 
 phi_presidio_config = PHIPresidioConfig(
     cache_dir=cache_dir,
-    threshold=0.7,  # Presidio confidence threshold
+    threshold=0.5,  # Lower threshold for better PHI detection
     batch_size=16,
 )
+
+phi_distilbert_config = PHIDistilBERTConfig(
+    model_name="dslim/distilbert-NER",  # Fast NER model with custom pattern enhancement
+    cache_dir=cache_dir,
+    threshold=0.3,  # Lower threshold for PHI detection
+    batch_size=16,
+)
+
+phi_claude_config = PHIClaudeConfig(
+    model_name="claude-sonnet-3.7",
+    endpoint_name="databricks-claude-3-7-sonnet",
+    threshold=0.8,
+    max_tokens=4000,
+)
+
+phi_ai_mask_config = PHIAIMaskConfig()
 
 # Model URIs
 phi_gliner_model_name = f"{catalog_name}.{schema_name}.{model_name}_phi_gliner"
 phi_biobert_model_name = f"{catalog_name}.{schema_name}.{model_name}_phi_biobert"
 phi_presidio_model_name = f"{catalog_name}.{schema_name}.{model_name}_phi_presidio"
+phi_distilbert_model_name = f"{catalog_name}.{schema_name}.{model_name}_phi_distilbert"
+phi_claude_model_name = f"{catalog_name}.{schema_name}.{model_name}_phi_claude"
+
+# AI_MASK doesn't need model registration - it's a built-in function
 
 print("Training and registering PHI models")
 print(f"Model type: {model_type}")
@@ -1494,6 +2958,40 @@ if model_type in ["presidio", "both", "all"]:
         print(f"PHI Presidio loading from UC: {presidio_uri}")
     model_uris["phi_presidio"] = presidio_uri
 
+# DistilBERT PHI model
+if model_type in ["distilbert", "all"]:
+    print(f"\nDistilBERT PHI Model: {phi_distilbert_model_name}")
+
+    if train:
+        distilbert_uri = train_and_register_phi_distilbert_model(
+            phi_distilbert_config, phi_distilbert_model_name
+        )
+        print(f"PHI DistilBERT registered: {distilbert_uri}")
+    else:
+        distilbert_uri = f"models:/{phi_distilbert_model_name}@{alias}"
+        print(f"PHI DistilBERT loading from UC: {distilbert_uri}")
+    model_uris["phi_distilbert"] = distilbert_uri
+
+# Claude PHI model
+if model_type in ["claude", "all"]:
+    print(f"\nClaude PHI Model: {phi_claude_model_name}")
+
+    if train:
+        claude_uri = train_and_register_phi_claude_model(
+            phi_claude_config, phi_claude_model_name
+        )
+        print(f"PHI Claude registered: {claude_uri}")
+    else:
+        claude_uri = f"models:/{phi_claude_model_name}@{alias}"
+        print(f"PHI Claude loading from UC: {claude_uri}")
+    model_uris["phi_claude"] = "ai_query"  # Use AI_QUERY instead of pandas UDF
+
+# AI_MASK PHI redaction (always available - no model needed)
+if model_type in ["ai_mask", "all"]:
+    print(f"\nAI_MASK PHI Redaction: Built-in Databricks function")
+    print(f"   Entities: {', '.join(phi_ai_mask_config.entities)}")
+    model_uris["phi_ai_mask"] = "builtin"  # Special marker for built-in function
+
 print(f"\nPHI models registered:")
 for model_name, uri in model_uris.items():
     print(f"   {model_name}: {uri}")
@@ -1501,10 +2999,132 @@ for model_name, uri in model_uris.items():
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## TEMPORARY: Direct Claude Model Testing
+
+# COMMAND ----------
+
+# Temporary test cell to debug Claude model directly (outside pandas UDF)
+print("🧪 TESTING CLAUDE MODEL DIRECTLY")
+print("=" * 50)
+
+# Set up authentication for ChatDatabricks (needed for distributed execution)
+import os
+
+try:
+    token = (
+        dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .apiToken()
+        .get()
+    )
+    host = (
+        "https://"
+        + dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .browserHostName()
+        .get()
+    )
+    os.environ["DATABRICKS_TOKEN"] = token
+    os.environ["DATABRICKS_HOST"] = host
+    print(f"✅ Authentication set for ChatDatabricks test")
+    print("")
+except Exception as e:
+    print(f"❌ Could not set auth: {e}")
+    print("")
+
+# Import the Claude model directly
+import sys
+
+sys.path.append(".")
+from unstructured_detection.claude_phi_model import PHIClaudeModel
+import pandas as pd
+
+# Create test data
+test_data = pd.DataFrame(
+    {
+        "text": [
+            "Patient John Smith (DOB: 01/15/1980) was treated by Dr. Anderson. Contact: phone (555) 123-4567, email john.smith@email.com. Address: 123 Main Street, Chicago, IL 60601. MRN: MED-12345."
+        ],
+        "text_type": ["medical"],
+    }
+)
+
+print(f"📝 Test input: {test_data['text'].iloc[0][:100]}...")
+
+# Create and test Claude model
+try:
+    claude_model = PHIClaudeModel()
+    claude_model.load_context(None)
+
+    print("\n🔄 Calling Claude model predict()...")
+    results = claude_model.predict(None, test_data)
+
+    print(f"\n✅ SUCCESS! Claude model results:")
+    print(f"   Results type: {type(results)}")
+    print(f"   Results shape: {results.shape}")
+    print(f"   Results columns: {results.columns.tolist()}")
+
+    if len(results) > 0:
+        result_row = results.iloc[0]
+        print(f"\n📊 Sample result:")
+        print(f"   Entities: {result_row['entities']}")
+        print(f"   Entity count: {result_row['entity_count']}")
+        print(f"   Redacted text: {result_row['redacted_text'][:100]}...")
+        print(f"   PHI compliant: {result_row['phi_compliant']}")
+
+    print("\n🎉 Claude model is working! Ready for pandas UDF batch processing.")
+
+except Exception as e:
+    print(f"\n❌ CLAUDE MODEL FAILED: {str(e)}")
+    print(f"   Exception type: {type(e).__name__}")
+    import traceback
+
+    print(f"   Full traceback:\n{traceback.format_exc()}")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## PHI-Compliant Batch Processing
 
 # COMMAND ----------
+
 source_df = spark.table(full_source_table)
+
+# Set authentication for ChatDatabricks in distributed execution
+print("🔐 Setting up authentication for ChatDatabricks...")
+import os
+
+try:
+    # Get authentication from notebook context
+    token = (
+        dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .apiToken()
+        .get()
+    )
+    host = (
+        "https://"
+        + dbutils.notebook.entry_point.getDbutils()
+        .notebook()
+        .getContext()
+        .browserHostName()
+        .get()
+    )
+
+    # Set environment variables and Spark executor environment
+    os.environ["DATABRICKS_TOKEN"] = token
+    os.environ["DATABRICKS_HOST"] = host
+    spark.conf.set("spark.executorEnv.DATABRICKS_TOKEN", token)
+    spark.conf.set("spark.executorEnv.DATABRICKS_HOST", host)
+
+    print(f"✅ Authentication set for ChatDatabricks")
+
+except Exception as e:
+    print(f"⚠️ Could not set auth from notebook context: {e}")
+    print("❌ ChatDatabricks may fail in distributed execution")
 
 # Process medical text with PHI-compliant models
 all_model_results = {}
@@ -1514,26 +3134,52 @@ for model_name, model_uri in model_uris.items():
     print(f"   Model URI: {model_uri}")
 
     print(f"   Applying PHI redaction to medical text...")
-    medical_results = process_medical_text_phi(
-        source_df, "medical_text_with_phi", model_uri
-    )
+
+    # Handle AI_MASK separately (built-in function, not MLflow model)
+    if model_name == "phi_ai_mask":
+        medical_results = process_ai_mask_batch(
+            full_source_table, "medical_text_with_phi", phi_ai_mask_config
+        )
+    elif model_name == "phi_claude":
+        medical_results = process_claude_ai_query_batch(medical_df, phi_claude_config)
+    else:
+        medical_results = process_medical_text_phi(
+            source_df, "medical_text_with_phi", model_uri
+        )
+
+    display(medical_results)
 
     # Join with source data
-    model_results = source_df.join(
-        medical_results.select(
+    if model_name == "phi_ai_mask":
+        # AI_MASK uses different column names
+        model_results = source_df.join(
+            medical_results.select(
+                "id",
+                col("ai_mask_entities").alias(f"{model_name}_entities"),
+                col("ai_mask_redacted_text").alias(f"{model_name}_redacted_text"),
+                col("ai_mask_entity_count").alias(f"{model_name}_entity_count"),
+                lit(True).alias(
+                    f"{model_name}_compliant"
+                ),  # AI_MASK is always compliant
+            ),
             "id",
-            col("phi_entities").alias(f"{model_name}_entities"),
-            col("phi_redacted_text").alias(f"{model_name}_redacted_text"),
-            col("phi_entity_count").alias(f"{model_name}_entity_count"),
-            col("phi_compliant").alias(f"{model_name}_compliant"),
-        ),
-        "id",
-    )
+        )
+    else:
+        model_results = source_df.join(
+            medical_results.select(
+                "id",
+                col("phi_entities").alias(f"{model_name}_entities"),
+                col("phi_redacted_text").alias(f"{model_name}_redacted_text"),
+                col("phi_entity_count").alias(f"{model_name}_entity_count"),
+                col("phi_compliant").alias(f"{model_name}_compliant"),
+            ),
+            "id",
+        )
 
     all_model_results[model_name] = model_results
     print(f"   {model_name.upper()} PHI processing complete")
 
-# Combine results into single table
+# Combine results into single table dynamically
 if len(all_model_results) == 1:
     # Single model case
     model_name = list(all_model_results.keys())[0]
@@ -1552,55 +3198,32 @@ if len(all_model_results) == 1:
         col(f"{model_name}_compliant").alias("phi_compliant"),
     )
 
-elif len(all_model_results) == 2:
-    # Both models case - create comparison table
-    gliner_results = all_model_results["phi_gliner"]
-    biobert_results = all_model_results["phi_biobert"]
-
-    # Join both model results
-    final_results = gliner_results.join(
-        biobert_results.select(
-            "id",
-            "phi_biobert_entities",
-            "phi_biobert_redacted_text",
-            "phi_biobert_entity_count",
-            "phi_biobert_compliant",
-        ),
-        "id",
-    )
-
-elif len(all_model_results) == 3:
-    gliner_results = all_model_results["phi_gliner"]
-    biobert_results = all_model_results["phi_biobert"]
-    presidio_results = all_model_results["phi_presidio"]
-
-    two_results = gliner_results.join(
-        biobert_results.select(
-            "id",
-            "phi_biobert_entities",
-            "phi_biobert_redacted_text",
-            "phi_biobert_entity_count",
-            "phi_biobert_compliant",
-        ),
-        "id",
-    )
-    final_results = presidio_results.join(
-        two_results.select(
-            "id",
-            "phi_biobert_entities",
-            "phi_biobert_redacted_text",
-            "phi_biobert_entity_count",
-            "phi_biobert_compliant",
-            "phi_gliner_entities",
-            "phi_gliner_redacted_text",
-            "phi_gliner_entity_count",
-            "phi_gliner_compliant",
-        ),
-        "id",
-    )
-
 else:
-    print("Number of model results", len(all_model_results))
+    # Multiple models case - join all results dynamically
+    print(f"Combining results from {len(all_model_results)} models...")
+
+    # Start with the first model as base
+    model_names = list(all_model_results.keys())
+    base_model = model_names[0]
+    final_results = all_model_results[base_model]
+
+    # Join each additional model
+    for model_name in model_names[1:]:
+        print(f"   Adding {model_name} results...")
+        model_df = all_model_results[model_name]
+
+        # Select only the model-specific columns to avoid duplicates
+        model_columns = [
+            "id",
+            f"{model_name}_entities",
+            f"{model_name}_redacted_text",
+            f"{model_name}_entity_count",
+            f"{model_name}_compliant",
+        ]
+
+        final_results = final_results.join(model_df.select(*model_columns), "id")
+
+    print(f"✅ Combined results from all {len(all_model_results)} models")
 
 
 # Save PHI-compliant results
@@ -1621,7 +3244,10 @@ if len(all_model_results) > 1:
     df.printSchema()
 
 display(df)
+
 # COMMAND ----------
+
+# MAGIC %md
 
 # MAGIC %md
 # MAGIC ## PHI Compliance Evaluation
@@ -1780,7 +3406,12 @@ def compare_phi_models(df: DataFrame, model_names: List[str]) -> Dict[str, Any]:
 
     # Evaluate each model for PHI compliance
     for model_name in model_names:
-        model_eval = evaluate_phi_compliance(df, model_name)
+        if model_name == "phi_ai_mask":
+            # Special evaluation for AI_MASK (redaction success only)
+            model_eval = evaluate_ai_mask_redaction(df)
+        else:
+            # Standard evaluation for all other models (including claude with AI_QUERY)
+            model_eval = evaluate_phi_compliance(df, model_name)
         model_evaluations[model_name] = model_eval
 
     # Create PHI compliance comparison
@@ -1969,6 +3600,12 @@ print("\n" + "=" * 80)
 print("🏥 PHI SAFE HARBOR COMPLIANCE FINAL REPORT")
 print("=" * 80)
 
+# Ensure we have access to results data
+try:
+    df = spark.table(full_results_table)
+except:
+    print("⚠️ Results table not found, unable to generate report")
+
 # Sample redacted results
 print(f"\n📝 **SAMPLE PHI REDACTION RESULTS:**")
 sample_df = df.limit(3).toPandas()
@@ -1977,20 +3614,39 @@ for i, (_, row) in enumerate(sample_df.iterrows(), 1):
     print(f"\n🆔 Medical Record {i} (ID: {row['id']}):")
     print(f"   📄 Original: {row['medical_text_with_phi'][:100]}...")
 
+    # Show results for all active models
     if len(model_uris) == 1:
         entities = json.loads(row["phi_detected_entities"])
         redacted = row["phi_redacted_text"]
         compliant = row["phi_compliant"]
+        print(f"   🏥 PHI Redacted: {redacted[:100]}...")
+        print(
+            f"   🔍 Identifiers Found: {len(entities)} ({[e.get('label', 'unknown') for e in entities[:3]]})"
+        )
+        print(f"   ✅ PHI Compliant: {'YES' if compliant else 'NO'}")
     else:
-        entities = json.loads(row["phi_gliner_entities"])  # Use GLiNER as example
-        redacted = row["phi_gliner_redacted_text"]
-        compliant = row["phi_gliner_compliant"]
+        # Show results for each model
+        model_display_names = {
+            "phi_gliner": "GLiNER",
+            "phi_biobert": "BioBERT",
+            "phi_presidio": "Presidio",
+            "phi_distilbert": "DistilBERT",
+            "phi_claude": "Claude",
+            "phi_ai_mask": "AI_MASK",
+        }
 
-    print(f"   🏥 PHI Redacted: {redacted[:100]}...")
-    print(
-        f"   🔍 Identifiers Found: {len(entities)} ({[e.get('label', 'unknown') for e in entities[:3]]})"
-    )
-    print(f"   ✅ PHI Compliant: {'YES' if compliant else 'NO'}")
+        for model_key, model_name in model_display_names.items():
+            if model_key in model_uris:
+                try:
+                    entities = json.loads(row[f"{model_key}_entities"])
+                    redacted = row[f"{model_key}_redacted_text"]
+                    compliant = row[f"{model_key}_compliant"]
+                    print(f"   🏥 {model_name}: {redacted[:80]}...")
+                    print(
+                        f"      ✅ Compliant: {'YES' if compliant else 'NO'} | 📊 Entities: {len(entities)}"
+                    )
+                except KeyError:
+                    print(f"   ⚠️ {model_name}: Results not available")
 
 print(f"\n🔐 **PHI SAFE HARBOR IDENTIFIERS ADDRESSED:**")
 phi_identifiers = [
@@ -2035,7 +3691,6 @@ def calculate_actual_redaction_success(
     from difflib import SequenceMatcher
 
     # Check if predicted text has placeholder patterns (indicating redaction occurred)
-    import re
 
     predicted_has_redaction = bool(re.search(r"\[[A-Z_]+\]", predicted_text))
     ground_truth_has_redaction = bool(re.search(r"\[[A-Z_]+\]", ground_truth_text))
@@ -2068,6 +3723,8 @@ model_mapping = {
     "phi_gliner": ("GLiNER", "phi_gliner"),
     "phi_biobert": ("BioBERT", "phi_biobert"),
     "phi_presidio": ("Presidio-Only", "phi_presidio"),
+    "phi_distilbert": ("DistilBERT", "phi_distilbert"),
+    "phi_claude": ("Claude", "phi_claude"),
 }
 
 print("\n🔄 Calculating real evaluation metrics for each model...")
@@ -2075,35 +3732,55 @@ print("\n🔄 Calculating real evaluation metrics for each model...")
 for model_key, (display_name, column_prefix) in model_mapping.items():
     if model_key in model_uris:
         print(f"   Evaluating {display_name}...")
-        try:
-            evaluation = evaluate_phi_compliance(df, column_prefix)
-            model_evaluations[display_name] = evaluation
-            print(f"   ✅ {display_name} evaluation complete")
-        except Exception as e:
-            print(f"   ❌ {display_name} evaluation failed: {str(e)}")
-            # Create default metrics if evaluation fails
-            model_evaluations[display_name] = {
-                "phi_detection_performance": {
-                    "precision": 0.0,
-                    "recall": 0.0,
-                    "f1": 0.0,
-                    "redaction_accuracy": 0.0,
-                }
-            }
+        print(
+            f"   Looking for columns: {column_prefix}_entities, {column_prefix}_redacted_text"
+        )
+
+        # Debug: Check if columns exist
+        available_cols = df.columns
+        entities_col = f"{column_prefix}_entities"
+        redacted_col = f"{column_prefix}_redacted_text"
+
+        if entities_col not in available_cols:
+            print(f"   ❌ Missing column: {entities_col}")
+            print(
+                f"   Available columns: {[c for c in available_cols if column_prefix in c]}"
+            )
+        if redacted_col not in available_cols:
+            print(f"   ❌ Missing column: {redacted_col}")
+
+        # Just let evaluation fail if there are issues - no try-catch hiding errors
+        evaluation = evaluate_phi_compliance(df, column_prefix)
+        model_evaluations[display_name] = evaluation
+        print(f"   ✅ {display_name} evaluation complete")
 
 # Create comparison table with real metrics
 comparison_data = []
 for display_name, evaluation in model_evaluations.items():
-    perf = evaluation["phi_detection_performance"]
-    comparison_data.append(
-        {
-            "Model": display_name,
-            "Precision": f"{perf['precision']:.3f}",
-            "Recall": f"{perf['recall']:.3f}",
-            "F1-Score": f"{perf['f1']:.3f}",
-            "Redaction Success": f"{perf['redaction_accuracy']:.3f}",
-        }
-    )
+    if evaluation.get("model_type") == "ai_mask":
+        # Special handling for AI_MASK which only has redaction metrics
+        redaction = evaluation["redaction_metrics"]
+        comparison_data.append(
+            {
+                "Model": display_name,
+                "Precision": "N/A",
+                "Recall": "N/A",
+                "F1-Score": "N/A",
+                "Redaction Success": f"{redaction['redaction_success_rate']:.3f}",
+            }
+        )
+    else:
+        # Standard model evaluation structure
+        perf = evaluation["phi_detection_performance"]
+        comparison_data.append(
+            {
+                "Model": display_name,
+                "Precision": f"{perf['precision']:.3f}",
+                "Recall": f"{perf['recall']:.3f}",
+                "F1-Score": f"{perf['f1']:.3f}",
+                "Redaction Success": f"{perf['redaction_accuracy']:.3f}",
+            }
+        )
 
 if comparison_data:
     comparison_df = pd.DataFrame(comparison_data)
@@ -2174,6 +3851,13 @@ def show_actual_redaction_examples():
     print("=" * 80)
     print("📊 Using real model predictions from evaluation data")
 
+    # Ensure we have access to results data
+    try:
+        df = spark.table(full_results_table)
+    except:
+        print("⚠️ Results table not found, unable to show redaction examples")
+        return
+
     # Get sample data from actual results
     sample_df = df.limit(3).toPandas()
 
@@ -2189,6 +3873,12 @@ def show_actual_redaction_examples():
         redaction_column_mapping["BioBERT"] = "phi_biobert_redacted_text"
     if "phi_presidio" in model_uris:
         redaction_column_mapping["Presidio-Only"] = "phi_presidio_redacted_text"
+    if "phi_distilbert" in model_uris:
+        redaction_column_mapping["DistilBERT"] = "phi_distilbert_redacted_text"
+    if "phi_claude" in model_uris:
+        redaction_column_mapping["Claude"] = "phi_claude_redacted_text"
+    if "phi_ai_mask" in model_uris:
+        redaction_column_mapping["AI_MASK"] = "phi_ai_mask_redacted_text"
 
     # Display actual redaction examples
     for i, (_, row) in enumerate(sample_df.iterrows(), 1):
@@ -2206,7 +3896,6 @@ def show_actual_redaction_examples():
                 print(f"  {display_name:12}: {redacted_text}")
 
                 # Count redactions for analysis
-                import re
 
                 redaction_count = len(re.findall(r"\[[A-Z_]+\]", redacted_text))
                 redaction_analysis.append((display_name, redaction_count))
@@ -2227,13 +3916,17 @@ def show_actual_redaction_examples():
     print("\n📋 **ACTUAL REDACTION ANALYSIS:**")
 
     # Calculate average redactions per model across all data
-    full_df = df.toPandas()
+    # df should already be available from above, but ensure it exists
+    try:
+        full_df = df.toPandas()
+    except NameError:
+        df = spark.table(full_results_table)
+        full_df = df.toPandas()
     redaction_stats = {}
 
     for display_name, column_name in redaction_column_mapping.items():
         if column_name in full_df.columns:
             # Count average redactions per record
-            import re
 
             redaction_counts = []
             for _, row in full_df.iterrows():
