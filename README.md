@@ -1,5 +1,20 @@
 # dbxmetagen: GenAI-Assisted Metadata Generation for Databricks
 
+# TODO: Improve review metadata tab
+# TODO: Two-pager document describing it - do a good job with this
+  - problem statement needs to be simple enough to understand why this is important and why this fills a gap
+      -   do the gap analysis
+      -   simple enough so that we can lead with that
+      -   and then the solution
+   - applicability -> where do we want this to be used?
+      - platform teams 
+      - for migrations
+      - anywhere we want to bulk generate + id/classify metadat
+      - every customer could be a target here for us
+   - 
+
+
+
 ## Expanded Documentation with Full Variable Reference
 
 This document provides a comprehensive guide to **dbxmetagen**, integrating all information from the original README and expanding it with details from the `variables.yml` configuration. Every option, workflow, and advanced usage pattern is included to ensure full transparency and control for users.

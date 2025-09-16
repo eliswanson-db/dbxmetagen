@@ -39,26 +39,47 @@ from mlflow.models import infer_signature
 import mlflow
 import mlflow
 from src.dbxmetagen.metadata_generator import CommentGenerator
-from openai.types.chat.chat_completion import Choice, ChatCompletion, ChatCompletionMessage
-from mlflow.types.llm import ChatResponse, ChatChoice, ChatChoiceLogProbs
+from openai.types.chat.chat_completion import (
+    Choice,
+    ChatCompletion,
+    ChatCompletionMessage,
+)
+
+# MLflow ChatResponse types were removed in newer versions, use conditional import
+try:
+    from mlflow.types.llm import ChatResponse, ChatChoice, ChatChoiceLogProbs
+except ImportError:
+    ChatResponse = None
+    ChatChoice = None
+    ChatChoiceLogProbs = None
 from openai import OpenAI
 import pandas as pd
 from openai.types.chat.chat_completion import ChatCompletion
-from mlflow.types.llm import ChatResponse, ChatChoice, ChatChoiceLogProbs, ChatMessage
+
+# Additional MLflow types (handled by previous conditional import)
 from src.dbxmetagen.prompts import Prompt
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.metadata_generator import PIResponse
-from src.dbxmetagen.model_logging import convert_to_chat_response, get_latest_model_version
+from src.dbxmetagen.model_logging import (
+    convert_to_chat_response,
+    get_latest_model_version,
+)
 
 # COMMAND ----------
 
-api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-os.environ["DATABRICKS_TOKEN"]=api_key
-os.environ["DATABRICKS_HOST"]=base_url
+api_key = (
+    dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+)
+os.environ["DATABRICKS_TOKEN"] = api_key
+os.environ["DATABRICKS_HOST"] = base_url
 mlflow.set_registry_uri("databricks-uc")
-METADATA_PARAMS = instantiate_metadata_objects(catalog_name, dest_schema, table_names, mode, base_url)
+METADATA_PARAMS = instantiate_metadata_objects(
+    catalog_name, dest_schema, table_names, mode, base_url
+)
 config = MetadataConfig(**METADATA_PARAMS)
-config.SETUP_PARAMS.update({'add_metadata': False}) # add_metadata makes a spark call so it has to be excluded from the model logging
+config.SETUP_PARAMS.update(
+    {"add_metadata": False}
+)  # add_metadata makes a spark call so it has to be excluded from the model logging
 comment_model = CommentGeneratorModel()
 comment_model.from_context(config)
 
@@ -75,36 +96,32 @@ latest_model_version = get_latest_model_version(f"{full_model_name}")
 import pandas as pd
 
 data = {
-  "request": [
-      "What is the difference between reduceByKey and groupByKey in Spark?",
-      {
-          "messages": [
-              {
-                  "role": "user",
-                  "content": "How can you minimize data shuffling in Spark?"
-              }
-          ]
-      },
-      {
-          "query": "Explain broadcast variables in Spark. How do they enhance performance?",
-          "history": [
-              {
-                  "role": "user",
-                  "content": "What are broadcast variables?"
-              },
-              {
-                  "role": "assistant",
-                  "content": "Broadcast variables allow the programmer to keep a read-only variable cached on each machine."
-              }
-          ]
-      }
-  ],
-
-  "expected_response": [
-    "expected response for first question",
-    "expected response for second question",
-    "expected response for third question"
-  ]
+    "request": [
+        "What is the difference between reduceByKey and groupByKey in Spark?",
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "How can you minimize data shuffling in Spark?",
+                }
+            ]
+        },
+        {
+            "query": "Explain broadcast variables in Spark. How do they enhance performance?",
+            "history": [
+                {"role": "user", "content": "What are broadcast variables?"},
+                {
+                    "role": "assistant",
+                    "content": "Broadcast variables allow the programmer to keep a read-only variable cached on each machine.",
+                },
+            ],
+        },
+    ],
+    "expected_response": [
+        "expected response for first question",
+        "expected response for second question",
+        "expected response for third question",
+    ],
 }
 
 eval_dataset = pd.DataFrame(data)
@@ -113,6 +130,6 @@ eval_dataset = pd.DataFrame(data)
 
 evaluation_results = mlflow.evaluate(
     data=eval_set_df,  # pandas DataFrame with just the evaluation set
-    model = f"models:/{full_model_name}/{latest_model_version}",  # 1 is the version number
+    model=f"models:/{full_model_name}/{latest_model_version}",  # 1 is the version number
     model_type="databricks-agent",
 )

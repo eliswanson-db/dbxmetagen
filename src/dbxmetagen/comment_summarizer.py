@@ -62,9 +62,19 @@ class TableCommentSummarizer:
 
     def summarize_comments(self, table_name: str) -> str:
         table_df = self.df.filter(self.df["table"] == table_name)
-        comments = table_df.select(
+
+        # Limit to first 25 columns to keep prompt size reasonable
+        column_count = table_df.count()
+        limited_df = table_df.limit(25)
+
+        comments = limited_df.select(
             concat_ws(" ", collect_list("column_content")).alias("all_comments")
         ).collect()[0]["all_comments"]
+
+        # Add info about column limitation if applicable
+        if column_count > 25:
+            limitation_note = f" [Note: This table has {column_count} columns total - summarizing based on first 25 columns to maintain prompt efficiency.]"
+            comments = comments + limitation_note
         prompt_content = [
             {
                 "role": "system",

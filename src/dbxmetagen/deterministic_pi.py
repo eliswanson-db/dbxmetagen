@@ -154,7 +154,7 @@ def process_table(
     current_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_dir = f"/Volumes/{config.catalog_name}/{config.schema_name}/generated_metadata/{sanitize_user_identifier(config.current_user)}/{current_date}/presidio_logs"
 
-    os.makedirs(output_dir, exist_ok=True)
+    # Note: Directory creation for UC volumes happens automatically when files are written
     analyzer = get_analyzer_engine()
     column_contents = data.get("column_contents", {})
     columns = column_contents.get("columns", [])

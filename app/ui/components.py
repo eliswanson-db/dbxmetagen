@@ -91,11 +91,11 @@ class UIComponents:
 
             mode = st.selectbox(
                 "Processing Mode",
-                options=["both", "comments", "pii"],
-                index=["both", "comments", "pii"].index(
-                    st.session_state.config.get("mode", "both")
+                options=["comments", "pii"],
+                index=["comments", "pii"].index(
+                    st.session_state.config.get("mode", "pii")
                 ),
-                help="What to generate: comments, PII classification, or both",
+                help="What to generate: comments or PII classification.",
             )
 
             st.subheader("🚀 Execution Settings")
@@ -108,9 +108,9 @@ class UIComponents:
                 ),
             )
 
-            apply_metadata = st.checkbox(
+            apply_ddl = st.checkbox(
                 "⚠️ Apply DDL (DANGEROUS)",
-                value=st.session_state.config.get("apply_metadata", False),
+                value=st.session_state.config.get("apply_ddl", False),
                 help="WARNING: This will directly modify your tables!",
             )
 
@@ -124,11 +124,11 @@ class UIComponents:
                         "sample_size": sample_size,
                         "mode": mode,
                         "cluster_size": cluster_size,
-                        "apply_metadata": apply_metadata,
+                        "apply_ddl": apply_ddl,
                     }
                 )
 
-                st.sidebar.success("✅ Configuration saved!")
+                st.sidebar.success("Configuration saved!")
 
     def render_unified_table_management(self):
         """Render the unified table management interface."""
@@ -167,7 +167,8 @@ class UIComponents:
                 if csv_tables:
                     # Update the text area
                     st.session_state.selected_tables = csv_tables
-                    st.rerun()
+                    st.success(f"✅ Loaded {len(csv_tables)} tables from CSV")
+                    # Note: Removed st.rerun() to prevent scroll-to-top - changes will show on next interaction
 
         # Parse and validate tables
         tables = self._parse_and_store_tables(table_names_input)
@@ -184,7 +185,7 @@ class UIComponents:
 
     def _render_table_action_buttons(self, tables: List[str]):
         """Render action buttons for table operations."""
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             if st.button("✅ Validate Tables", type="secondary"):
@@ -197,27 +198,16 @@ class UIComponents:
         with col3:
             self._render_job_creation_button(tables)
 
-        with col4:
-            self._debug_job_manager_creation(tables)
-
     def _render_job_creation_button(self, tables: List[str]):
-        """Render job creation button with working dialog trigger"""
+        """Render job creation button with direct execution"""
         if st.button("🚀 Create & Run Job", type="primary"):
-            # Show the job dialog directly (working implementation)
-            self.show_job_creation_dialog(tables)
-
-    def _debug_job_manager_creation(self, tables: List[str]):
-        """Debug job manager creation - using working implementation"""
-        if st.button("🔧 Debug Job Creation"):
             if not self.job_manager:
                 st.error(
                     "❌ Databricks client not initialized. Please check connection."
                 )
                 return
-            with st.spinner("Creating debug job..."):
-                self.job_manager.debug_job_manager_creation(
-                    tables[:3]
-                )  # Limit to 3 tables for testing
+            with st.spinner("Creating and running job..."):
+                self.job_manager.create_and_run_metadata_job(tables)
 
     def _show_no_tables_warning(self):
         """Show warning when no tables are provided."""
@@ -270,87 +260,6 @@ class UIComponents:
                 mime="text/csv",
             )
 
-    def show_job_creation_dialog(self, tables: List[str]):
-        """Show job creation dialog with configuration options (WORKING IMPLEMENTATION)"""
-        st.markdown("---")
-        st.subheader("🚀 Create Metadata Generation Job")
-
-        with st.container():
-            col1, col2 = st.columns([2, 1])
-
-            with col1:
-                job_name = st.text_input(
-                    "Job Name",
-                    value=f"dbxmetagen_job_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                    help="Name for the metadata generation job",
-                )
-
-                cluster_size = st.selectbox(
-                    "Cluster Size",
-                    options=[
-                        "Small (1-2 workers)",
-                        "Medium (2-4 workers)",
-                        "Large (4-8 workers)",
-                    ],
-                    index=1,
-                    help="Cluster size for the job",
-                )
-
-                # Show tables that will be processed
-                with st.expander(f"📋 Tables to Process ({len(tables)})"):
-                    for i, table in enumerate(tables[:10], 1):
-                        st.write(f"{i}. {table}")
-                    if len(tables) > 10:
-                        st.write(f"... and {len(tables) - 10} more tables")
-
-            with col2:
-                st.markdown("**Current Configuration:**")
-                config_preview = {
-                    "Mode": st.session_state.config.get("mode", "comment"),
-                    "Allow Data": st.session_state.config.get("allow_data", False),
-                    "Sample Size": st.session_state.config.get("sample_size", 5),
-                    "Apply DDL": st.session_state.config.get("apply_ddl", False),
-                }
-
-                for key, value in config_preview.items():
-                    st.write(f"**{key}:** {value}")
-
-            # Create and run button (IMPROVED IMPLEMENTATION)
-            if st.button("🚀 Create & Run Job", type="primary", key="create_job_main"):
-                logger.info(
-                    f"Create & Run Job button clicked - job_name: {job_name}, tables: {len(tables)}, cluster_size: {cluster_size}"
-                )
-
-                if not self.job_manager:
-                    st.error(
-                        "❌ Databricks client not initialized. Please check connection."
-                    )
-                    return
-
-                with st.spinner("Creating and running job..."):
-                    try:
-                        # Add debug output
-                        st.write(f"🔧 Debug: Starting job creation...")
-                        st.write(f"🔧 Job name: {job_name}")
-                        st.write(f"🔧 Tables: {len(tables)} total")
-                        st.write(f"🔧 Cluster size: {cluster_size}")
-                        st.write(
-                            f"🔧 Config keys: {list(st.session_state.config.keys())}"
-                        )
-
-                        self.job_manager.create_and_run_job(
-                            job_name, tables, cluster_size
-                        )
-
-                        st.write("🔧 Debug: Job creation completed successfully")
-                    except Exception as create_job_e:
-                        st.error(f"❌ Failed to create job: {create_job_e}")
-                        logger.error(f"ERROR in create_and_run_job: {create_job_e}")
-                        import traceback
-
-                        st.markdown("**Full Error Traceback:**")
-                        st.code(traceback.format_exc())
-
     def render_job_status_section(self):
         """Render job status monitoring section."""
         st.header("📊 Job Status")
@@ -359,7 +268,15 @@ class UIComponents:
             st.info("No jobs to display. Create a job above to track its status.")
             return
 
-        # Job status header with manual refresh button (WORKING IMPLEMENTATION)
+        # Job status header with manual refresh button
+        self._render_job_status_header()
+
+        # Display job status using working format (run_id as key)
+        self._display_job_status_working()
+
+    @st.fragment
+    def _render_job_status_header(self):
+        """Render job status header with refresh button (isolated fragment to prevent scroll issues)"""
         col1, col2 = st.columns([3, 1])
         with col1:
             st.subheader("📊 Job Status")
@@ -373,10 +290,7 @@ class UIComponents:
                 with st.spinner("Refreshing job status..."):
                     self.job_manager.refresh_job_status()
                 st.success("✅ Status refreshed!")
-                st.rerun()
-
-        # Display job status using working format (run_id as key)
-        self._display_job_status_working()
+                # Note: No st.rerun() needed - fragment reruns automatically
 
     def _display_job_status_working(self):
         """Display job status using working format (run_id as key)"""
@@ -485,44 +399,178 @@ class UIComponents:
             st.dataframe(df, use_container_width=True)
 
     def render_metadata_review(self):
-        """Render metadata review interface."""
+        """Render metadata review interface with editing capabilities."""
         st.header("✏️ Review Metadata")
 
-        uploaded_file = st.file_uploader(
-            "Upload Metadata File for Review",
-            type=["tsv", "csv"],
-            help="Upload a TSV or CSV file with metadata to review",
-        )
+        # Configuration inputs (same as Results Viewer)
+        col1, col2, col3 = st.columns(3)
 
-        if uploaded_file:
-            df = self.metadata_processor.review_uploaded_metadata(uploaded_file)
-            if df is not None:
-                st.subheader("📋 Metadata Review")
-                st.dataframe(df, use_container_width=True)
+        with col1:
+            catalog = st.text_input(
+                "Catalog",
+                value=st.session_state.config.get("catalog_name", "dbxmetagen"),
+                key="review_catalog",
+            )
 
-                st.subheader("🚀 Apply Changes")
+        with col2:
+            schema = st.text_input(
+                "Schema",
+                value=st.session_state.config.get("schema_name", "metadata_results"),
+                key="review_schema",
+            )
 
-                col1, col2 = st.columns(2)
+        with col3:
+            volume = st.text_input(
+                "Volume",
+                value=st.session_state.config.get("volume_name", "generated_metadata"),
+                key="review_volume",
+            )
 
-                with col1:
-                    if st.button("✅ Apply to Tables"):
-                        self._apply_metadata(df)
+        if st.button("📥 Load Metadata for Review", key="load_metadata_review_btn"):
+            with st.spinner("Loading metadata from volume..."):
+                df = self.metadata_processor.load_metadata_from_volume(
+                    catalog, schema, volume
+                )
+                if df is not None:
+                    st.session_state.review_metadata = df
+                    st.session_state.review_metadata_original_path = {
+                        "catalog": catalog,
+                        "schema": schema,
+                        "volume": volume,
+                    }
 
-                with col2:
-                    if st.button("🚀 Create Sync Job"):
-                        if not self.job_manager:
-                            st.error(
-                                "❌ Databricks client not initialized. Please check connection."
-                            )
-                        else:
-                            self.job_manager.create_sync_metadata_job(
-                                df, uploaded_file.name
-                            )
+        # Display and edit metadata
+        if st.session_state.get("review_metadata") is not None:
+            df = st.session_state.review_metadata
+
+            st.success(f"✅ Loaded {len(df)} metadata records for review")
+
+            st.subheader("📋 Edit Metadata")
+            st.info(
+                "💡 Edit the Description and PII Classification fields. DDL will be auto-generated when you save or apply changes."
+            )
+
+            # Use data_editor for editing capabilities - focus on comment editing
+            edited_df = st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "table": st.column_config.TextColumn("Table", disabled=True),
+                    "column": st.column_config.TextColumn("Column", disabled=True),
+                    "column_content": st.column_config.TextColumn("Description"),
+                    "pii_classification": st.column_config.TextColumn(
+                        "PII Classification"
+                    ),
+                    "ddl": st.column_config.TextColumn(
+                        "DDL (Auto-generated)", disabled=True, width="large"
+                    ),
+                },
+            )
+
+            # Store the edited data
+            st.session_state.review_metadata = edited_df
+
+            st.subheader("💾 Save & Apply Changes")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                if st.button("💾 Save Reviewed Metadata"):
+                    self._save_reviewed_metadata(edited_df)
+
+            with col2:
+                if st.button("✅ Apply to Tables"):
+                    self._apply_metadata(edited_df)
+
+            with col3:
+                if st.button("🚀 Create Sync Job"):
+                    if not self.job_manager:
+                        st.error(
+                            "❌ Databricks client not initialized. Please check connection."
+                        )
+                    else:
+                        self.job_manager.create_sync_metadata_job(
+                            edited_df, "reviewed_metadata"
+                        )
+
+    def _save_reviewed_metadata(self, df: pd.DataFrame):
+        """Save reviewed metadata back to volume with _reviewed suffix."""
+        if not st.session_state.get("review_metadata_original_path"):
+            st.error("❌ Original file path not found. Please reload the metadata.")
+            return
+
+        try:
+            # Generate DDL from edited comments before saving
+            st.info("🔄 Generating DDL from edited comments...")
+            updated_df = self.metadata_processor._generate_ddl_from_comments(df)
+            st.session_state.review_metadata = (
+                updated_df  # Update session state with new DDL
+            )
+            path_info = st.session_state.review_metadata_original_path
+
+            # Get current user and date for path construction
+            if not st.session_state.get("workspace_client"):
+                st.error("❌ Workspace client not initialized")
+                return
+
+            current_user = st.session_state.workspace_client.current_user.me().user_name
+            sanitized_user = current_user.replace("@", "_").replace(".", "_")
+            current_date = datetime.now().strftime("%Y%m%d")
+
+            # Construct the output path with _reviewed suffix
+            volume_path = f"/Volumes/{path_info['catalog']}/{path_info['schema']}/{path_info['volume']}"
+            output_dir = (
+                f"{volume_path}/{sanitized_user}/{current_date}/exportable_run_logs/"
+            )
+
+            # Find the original file name pattern and add _reviewed
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"review_metadata_reviewed_{timestamp}.tsv"
+            output_path = f"{output_dir}{output_filename}"
+
+            # Save as TSV format (using updated DataFrame with regenerated DDL)
+            with st.spinner(f"Saving reviewed metadata to {output_path}..."):
+                tsv_content = updated_df.to_csv(sep="\t", index=False)
+
+                # Use existing workspace client for proper Unity Catalog volume writing
+                try:
+                    # Use the existing workspace client's file upload capability
+                    tsv_bytes = tsv_content.encode("utf-8")
+                    st.session_state.workspace_client.files.upload(
+                        output_path, tsv_bytes, overwrite=True
+                    )
+                except Exception as e:
+                    # Fallback: direct file write
+                    st.warning(f"WorkspaceClient upload failed: {str(e)}")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(tsv_content)
+
+                st.success(f"✅ Reviewed metadata saved to: {output_path}")
+                st.info(f"📄 File: {output_filename}")
+
+                # Also provide download option
+                st.download_button(
+                    label="📥 Download Reviewed Metadata",
+                    data=tsv_content.encode("utf-8"),
+                    file_name=output_filename,
+                    mime="text/tab-separated-values",
+                )
+
+        except Exception as e:
+            st.error(f"❌ Error saving reviewed metadata: {str(e)}")
+            logger.error(f"Error saving reviewed metadata: {str(e)}")
 
     def _apply_metadata(self, df: pd.DataFrame):
         """Apply metadata changes to tables."""
+        if not self.job_manager:
+            st.error("❌ Databricks client not initialized. Please check connection.")
+            return
+
         with st.spinner("Applying metadata to tables..."):
-            results = self.metadata_processor.apply_metadata_to_tables(df)
+            results = self.metadata_processor.apply_metadata_to_tables(
+                df, self.job_manager
+            )
 
             if results["success"]:
                 st.success(f"✅ Applied metadata to {results['applied']} tables")
@@ -584,7 +632,7 @@ class UIComponents:
             st.session_state.config.update(config)
 
             st.sidebar.success("✅ Configuration loaded!")
-            st.rerun()
+            # Note: Removed st.rerun() to prevent scroll-to-top - changes will show on next interaction
 
         except Exception as e:
             st.sidebar.error(f"❌ Failed to load config: {str(e)}")
@@ -633,9 +681,3 @@ class UIComponents:
             - **Large Tables**: Consider reducing sample size for very large tables
             """
             )
-
-
-# Job dialog is now handled directly in the button click (working implementation)
-def handle_job_dialog_display():
-    """DEPRECATED - Job dialog now handled directly in button click."""
-    pass

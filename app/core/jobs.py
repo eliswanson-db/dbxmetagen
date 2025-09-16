@@ -87,9 +87,7 @@ class JobManager:
         self._validate_inputs(job_name, tables, cluster_size, config)
 
         # Step 2: Prepare job configuration
-        workers = self._get_worker_config(cluster_size)
         job_parameters = self._build_job_parameters(tables, config)
-        node_type = self._detect_node_type(config)
         notebook_path = self._resolve_notebook_path(config)
 
         # Step 3: Create and run job
@@ -373,21 +371,26 @@ class JobManager:
 
     # === Job creation UI methods ===
 
-    def create_and_run_job(self, job_name: str, tables: List[str], cluster_size: str):
-        """Create and run a metadata generation job (Streamlit UI wrapper)"""
-        if not st.session_state.get("workspace_client"):
-            st.error("❌ Workspace client not initialized")
-            return
-
-        if not tables:
-            st.error("❌ No tables provided")
-            return
-
+    def create_and_run_metadata_job(self, tables: List[str]):
+        """Create and run a metadata generation job with optimal configuration"""
         try:
+            job_name = f"dbxmetagen_job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            # Use medium cluster size as a good default for production
+            cluster_size = st.session_state.config.get("cluster_size", "medium")
+            cluster_size_map = {
+                "small": "Small (1-2 workers)",
+                "medium": "Medium (2-4 workers)",
+                "large": "Large (4-8 workers)",
+            }
+            cluster_size_display = cluster_size_map.get(
+                cluster_size, "Medium (2-4 workers)"
+            )
+
             job_id, run_id = self.create_metadata_job(
                 job_name=job_name,
                 tables=tables,
-                cluster_size=cluster_size,
+                cluster_size=cluster_size_display,
                 config=st.session_state.config,
             )
 
@@ -401,7 +404,7 @@ class JobManager:
                 "run_id": run_id,
                 "tables": tables,
                 "config": st.session_state.config,
-                "cluster_size": cluster_size,
+                "cluster_size": cluster_size_display,
                 "status": "RUNNING",
                 "start_time": datetime.now(),
                 "created_at": datetime.now().isoformat(),
@@ -413,14 +416,12 @@ class JobManager:
             st.write(f"📊 **Processing:** {len(tables)} tables")
 
         except Exception as e:
-            st.error(f"❌ Failed to create job: {str(e)}")
-            logger.error(f"Failed to create job: {str(e)}", exc_info=True)
+            st.error(f"❌ Job creation failed: {str(e)}")
+            logger.error(f"Job creation failed: {str(e)}", exc_info=True)
 
-            # Show debug details (matching debug method behavior)
+            # Show debug information for troubleshooting
             st.markdown("**Debug Information:**")
-            st.write(f"- Job name: {job_name}")
             st.write(f"- Tables: {len(tables)} total")
-            st.write(f"- Cluster size: {cluster_size}")
             st.write(
                 f"- Config available: {'Yes' if st.session_state.config else 'No'}"
             )
@@ -428,48 +429,9 @@ class JobManager:
                 f"- Workspace client: {'Yes' if st.session_state.get('workspace_client') else 'No'}"
             )
 
-            # Show full exception details
             import traceback
 
             st.code(traceback.format_exc())
-
-    def debug_job_manager_creation(self, tables: List[str]):
-        """Debug job creation with a test job"""
-        try:
-            from utils import get_current_user_email
-
-            current_user_email = get_current_user_email()
-            job_name = f"dbxmetagen_debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-            job_id, run_id = self.create_metadata_job(
-                job_name=job_name,
-                tables=tables,
-                cluster_size="Small (1-2 workers)",
-                config=st.session_state.config,
-            )
-
-            # Store job run info for tracking (using run_id as key)
-            if "job_runs" not in st.session_state:
-                st.session_state.job_runs = {}
-
-            st.session_state.job_runs[run_id] = {
-                "job_id": job_id,
-                "job_name": job_name,
-                "run_id": run_id,
-                "tables": tables,
-                "config": st.session_state.config,
-                "cluster_size": "Small (1-2 workers)",
-                "status": "RUNNING",
-                "start_time": datetime.now(),
-                "created_at": datetime.now().isoformat(),
-            }
-
-            st.success("✅ Debug job created!")
-            st.write(f"Job ID: {job_id}, Run ID: {run_id}")
-
-        except Exception as e:
-            st.error(f"❌ Debug job creation failed: {str(e)}")
-            logger.error(f"Debug job creation failed: {str(e)}", exc_info=True)
 
     def create_sync_metadata_job(self, df, filename: str):
         """Create a job to sync reviewed metadata"""
@@ -494,6 +456,18 @@ class JobManager:
                 f"sync_reviewed_metadata_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
 
+            # Get notebook path using deploying user, not service principal
+            current_user = self.workspace_client.current_user.me().user_name
+
+            # Check if current user is service principal, use deploying user instead
+            if "@" not in current_user or current_user.startswith("034f50f1"):
+                # This is a service principal, use the actual deploying user
+                deploying_user = "eli.swanson@databricks.com"  # From app.yml config
+                notebook_path = f"/Users/{deploying_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+            else:
+                # This is a real user
+                notebook_path = f"/Users/{current_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+
             job = self.workspace_client.jobs.create(
                 environments=[
                     JobEnvironment(
@@ -507,7 +481,7 @@ class JobManager:
                     Task(
                         task_key="sync_metadata",
                         notebook_task=NotebookTask(
-                            notebook_path="./notebooks/sync_reviewed_ddl",
+                            notebook_path=notebook_path,
                             base_parameters=job_parameters,
                         ),
                         timeout_seconds=14400,
@@ -524,3 +498,61 @@ class JobManager:
         except Exception as e:
             st.error(f"❌ Error creating sync job: {str(e)}")
             logger.error(f"Error creating sync job: {str(e)}")
+
+    def create_and_run_sync_job(
+        self, filename: str, mode: str = "comment"
+    ) -> Tuple[int, int]:
+        """Create and run a DDL sync job using sync_reviewed_ddl.py notebook"""
+        try:
+            # Job parameters matching the sync_reviewed_ddl.py notebook widgets
+            job_parameters = {"reviewed_file_name": filename, "mode": mode}
+
+            job_name = f"ddl_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            # Get notebook path using deploying user, not service principal
+            current_user = self.workspace_client.current_user.me().user_name
+
+            # Check if current user is service principal, use deploying user instead
+            if "@" not in current_user or current_user.startswith("034f50f1"):
+                # This is a service principal, use the actual deploying user
+                deploying_user = "eli.swanson@databricks.com"  # From app.yml config
+                notebook_path = f"/Users/{deploying_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+            else:
+                # This is a real user
+                notebook_path = f"/Users/{current_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+
+            # Create the job
+            job = self.workspace_client.jobs.create(
+                environments=[
+                    JobEnvironment(
+                        environment_key="default_python",
+                        spec=Environment(environment_version="2"),
+                    )
+                ],
+                performance_target=PerformanceTarget.PERFORMANCE_OPTIMIZED,
+                name=job_name,
+                tasks=[
+                    Task(
+                        task_key="sync_ddl",
+                        notebook_task=NotebookTask(
+                            notebook_path=notebook_path,
+                            base_parameters=job_parameters,
+                        ),
+                        timeout_seconds=3600,  # 1 hour timeout
+                    )
+                ],
+                max_concurrent_runs=1,
+            )
+
+            # Run the job immediately
+            run = self.workspace_client.jobs.run_now(job.job_id)
+
+            logger.info(
+                f"DDL sync job created and started - job_id: {job.job_id}, run_id: {run.run_id}"
+            )
+            return job.job_id, run.run_id
+
+        except Exception as e:
+            error_msg = f"Failed to create and run DDL sync job: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)

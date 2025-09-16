@@ -58,23 +58,41 @@ class DBXMetaGenApp:
 
         self.ui_components.render_sidebar_config()
 
-        # Main content tabs
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📋 Tables & Jobs", "📊 Results", "✏️ Review Metadata", "❓ Help"]
+        # Navigation with state management - no tab jumping!
+        if "current_section" not in st.session_state:
+            st.session_state.current_section = "📋 Tables & Jobs"
+
+        selected_section = st.radio(
+            "Navigate:",
+            ["📋 Tables & Jobs", "📊 Results", "✏️ Review Metadata", "❓ Help"],
+            index=[
+                "📋 Tables & Jobs",
+                "📊 Results",
+                "✏️ Review Metadata",
+                "❓ Help",
+            ].index(st.session_state.current_section),
+            key="main_navigation",
+            horizontal=True,
         )
 
-        with tab1:
+        # Update session state
+        st.session_state.current_section = selected_section
+
+        st.markdown("---")
+
+        # Render the selected section
+        if selected_section == "📋 Tables & Jobs":
             self.ui_components.render_unified_table_management()
             st.markdown("---")
             self.ui_components.render_job_status_section()
 
-        with tab2:
+        elif selected_section == "📊 Results":
             self.ui_components.render_results_viewer()
 
-        with tab3:
+        elif selected_section == "✏️ Review Metadata":
             self.ui_components.render_metadata_review()
 
-        with tab4:
+        elif selected_section == "❓ Help":
             self.ui_components.render_help()
 
     def render_debug_info(self):

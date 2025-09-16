@@ -5,6 +5,20 @@ This module contains utility functions for handling user identifiers,
 separated to avoid circular imports.
 """
 
+from pyspark.sql import SparkSession
+
+
+def get_current_user() -> str:
+    """
+    Retrieves the current user.
+
+    Returns:
+        str: The current user.
+    """
+    spark = SparkSession.builder.getOrCreate()
+    # Use first() instead of collect() for single values - more efficient
+    return spark.sql("SELECT current_user()").first()[0]
+
 
 def sanitize_user_identifier(identifier: str) -> str:
     """

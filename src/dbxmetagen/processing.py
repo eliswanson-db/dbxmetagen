@@ -53,7 +53,13 @@ from openai.types.chat.chat_completion import (
     ChatCompletion,
     ChatCompletionMessage,
 )
-from mlflow.types.llm import TokenUsageStats, ChatResponse
+
+# MLflow ChatResponse was removed in newer versions, use conditional import
+try:
+    from mlflow.types.llm import TokenUsageStats, ChatResponse
+except ImportError:
+    TokenUsageStats = None
+    ChatResponse = None
 
 
 from src.dbxmetagen.config import MetadataConfig
@@ -78,7 +84,7 @@ from src.dbxmetagen.overrides import (
     build_condition,
     get_join_conditions,
 )
-from src.dbxmetagen.user_utils import sanitize_user_identifier
+from src.dbxmetagen.user_utils import sanitize_user_identifier, get_current_user
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -555,18 +561,6 @@ def add_column_ddl_to_pi_df(config, df: DataFrame, ddl_column: str) -> DataFrame
     return df
 
 
-def get_current_user() -> str:
-    """
-    Retrieves the current user.
-
-    Returns:
-        str: The current user.
-    """
-    spark = SparkSession.builder.getOrCreate()
-    # Use first() instead of collect() for single values - more efficient
-    return spark.sql("SELECT current_user()").first()[0]
-
-
 def df_to_sql_file(
     df: DataFrame,
     catalog_name: str,
@@ -665,7 +659,24 @@ def df_column_to_excel_file(
         excel_file_path = os.path.join(output_dir, f"{filename}.xlsx")
         local_path = f"/local_disk0/tmp/{filename}.xlsx"
         df[[excel_column]].to_excel(local_path, index=False, engine="openpyxl")
-        copyfile(local_path, excel_file_path)
+
+        # Use Databricks SDK WorkspaceClient for UC volume compatibility
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            w = WorkspaceClient()
+
+            with open(local_path, "rb") as src_file:
+                excel_content = src_file.read()
+
+            # Upload using WorkspaceClient (handles UC volumes properly)
+            w.files.upload(excel_file_path, excel_content, overwrite=True)
+
+        except Exception:
+            # Fallback to direct file write
+            with open(local_path, "rb") as src_file:
+                with open(excel_file_path, "wb") as dest_file:
+                    dest_file.write(src_file.read())
         logger.info(
             f"Successfully wrote column '{excel_column}' to Excel file: {excel_file_path}"
         )
@@ -843,6 +854,8 @@ def _export_table_to_tsv(df, config):
         if not hasattr(df, "count") or not callable(getattr(df, "count")):
             raise TypeError("Input is not a valid Spark DataFrame.")
 
+        current_user = get_current_user()  # FIX: Define current_user
+        current_user_sanitized = sanitize_user_identifier(current_user)
         date = datetime.now().strftime("%Y%m%d")
         if not hasattr(config, "log_timestamp") or not config.log_timestamp:
             config.log_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -855,7 +868,9 @@ def _export_table_to_tsv(df, config):
         volume_path = (
             f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}"
         )
-        folder_path = f"{volume_path}/{current_user}/{date}/exportable_run_logs/"
+        folder_path = (
+            f"{volume_path}/{current_user_sanitized}/{date}/exportable_run_logs/"
+        )
         output_file = (
             f"{folder_path}review_metadata_{config.mode}_{config.log_timestamp}.tsv"
         )
@@ -883,8 +898,33 @@ def _export_table_to_tsv(df, config):
             return False
 
         try:
+            # Write to local temp file first
             output_df_pandas_to_tsv(df, local_path)
-            copyfile(local_path, output_file)
+
+            # Use Databricks SDK WorkspaceClient for proper Unity Catalog volume writing
+            try:
+                from databricks.sdk import WorkspaceClient
+
+                w = WorkspaceClient()
+
+                # Read the local file content
+                with open(local_path, "rb") as src_file:
+                    file_content = src_file.read()
+
+                # Upload to Unity Catalog volume using WorkspaceClient (creates directories automatically)
+                w.files.upload(output_file, file_content, overwrite=True)
+                print(f"Successfully wrote TSV file to: {output_file}")
+
+            except Exception as upload_error:
+                print(f"WorkspaceClient upload failed: {upload_error}")
+                # Fallback: try direct file write
+                print("Attempting direct file write fallback...")
+                with open(local_path, "r", encoding="utf-8") as src_file:
+                    tsv_content = src_file.read()
+                with open(output_file, "w", encoding="utf-8") as dest_file:
+                    dest_file.write(tsv_content)
+                print(f"Successfully wrote TSV file via fallback: {output_file}")
+
         except Exception as e:
             print(f"Error writing DataFrame to TSV file '{output_file}': {str(e)}")
             return False
@@ -908,6 +948,16 @@ class ExportError(Exception):
 
 
 def create_folder_if_not_exists(path: str) -> None:
+    """Create directory if it doesn't exist. For Unity Catalog volumes, directories are created automatically."""
+    # Check if this is a Unity Catalog volume path
+    if path.startswith("/Volumes/"):
+        # For UC volumes, directories are created automatically when files are written
+        logger.info(
+            f"Unity Catalog volume path detected: {path} - directory will be created automatically"
+        )
+        return
+
+    # Handle local file system paths
     try:
         if not os.path.exists(path):
             os.makedirs(path)
@@ -934,7 +984,24 @@ def export_df_to_excel(df: pd.DataFrame, output_file: str, export_folder: str) -
                     header=False,
                     index=False,
                 )
-        copyfile(local_path, os.path.join(export_folder, output_file))
+        # Use Databricks SDK WorkspaceClient for UC volume compatibility
+        volume_output_path = os.path.join(export_folder, output_file)
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            w = WorkspaceClient()
+
+            with open(local_path, "rb") as src_file:
+                excel_content = src_file.read()
+
+            # Upload using WorkspaceClient (handles UC volumes properly)
+            w.files.upload(volume_output_path, excel_content, overwrite=True)
+
+        except Exception:
+            # Fallback to direct file write
+            with open(local_path, "rb") as src_file:
+                with open(volume_output_path, "wb") as dest_file:
+                    dest_file.write(src_file.read())
         logger.info(f"Excel file created at: {output_file}")
     except Exception as e:
         logger.error(f"Failed to export DataFrame to Excel: {e}")
@@ -2048,7 +2115,7 @@ def setup_ddl(config: MetadataConfig) -> None:
     if config.volume_name:
         spark.sql(volume_sql)
         review_output_path = f"/Volumes/{config.catalog_name}/{config.schema_name}/{config.volume_name}/{sanitize_user_identifier(config.current_user)}/reviewed_outputs/"
-        os.makedirs(review_output_path, exist_ok=True)
+        # Note: Directory creation for UC volumes happens automatically when files are written
 
 
 def create_tables(config: MetadataConfig) -> None:

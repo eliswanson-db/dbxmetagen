@@ -24,6 +24,14 @@ def ensure_directory_exists(path: str) -> None:
     Args:
         path (str): Directory path.
     """
+    # Check if this is a Unity Catalog volume path
+    if path.startswith("/Volumes/"):
+        # For UC volumes, directories are created automatically when files are written
+        logging.info(
+            f"Unity Catalog volume path detected: {path} - directory will be created automatically"
+        )
+        return
+
     if not os.path.exists(path):
         try:
             os.makedirs(path, exist_ok=True)
@@ -252,7 +260,29 @@ def export_metadata(
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             local_path = "/local_disk0/tmp/{input_file}.xlsx"
             df.to_excel(local_path, index=False)
-            copyfile(local_path, output_file)
+
+            # Use Databricks SDK WorkspaceClient for UC volume compatibility
+            try:
+                if output_file.startswith("/Volumes/"):
+                    from databricks.sdk import WorkspaceClient
+
+                    w = WorkspaceClient()
+
+                    with open(local_path, "rb") as src_file:
+                        excel_content = src_file.read()
+
+                    # Upload using WorkspaceClient (handles UC volumes properly)
+                    w.files.upload(output_file, excel_content, overwrite=True)
+                else:
+                    # Direct file write for local paths
+                    with open(local_path, "rb") as src_file:
+                        with open(output_file, "wb") as dest_file:
+                            dest_file.write(src_file.read())
+            except Exception:
+                # Fallback to direct file write
+                with open(local_path, "rb") as src_file:
+                    with open(output_file, "wb") as dest_file:
+                        dest_file.write(src_file.read())
             logging.info(f"Exported Excel file: {output_file}")
         except Exception as e:
             logging.error(f"Failed to write Excel file: {e}")
