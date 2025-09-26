@@ -32,22 +32,32 @@ class DBXMetaGenApp:
     """Main application class - now much cleaner and focused."""
 
     def __init__(self):
-        """Initialize the application."""  # TODO: Leave off review here
+        """Initialize the application with authentication on session start."""
         self.config_manager = ConfigManager()
         self.ui_components = UIComponents()
 
-        client_ready = DatabricksClientManager.setup_client()
+        # Initialize authentication on session start for better user experience
+        logger.info("🔄 Initializing authentication on session start...")
+        self.client_ready = DatabricksClientManager.setup_client()
 
-        if client_ready:
-            logger.info(
-                "✅ DBX MetaGen App initialized successfully with Databricks connection"
-            )
+        if self.client_ready:
+            logger.info("✅ DBX MetaGen App initialized with successful authentication")
         else:
-            logger.warning(
-                "⚠️ DBX MetaGen App initialized but Databricks connection failed"
-            )
+            logger.warning("⚠️ DBX MetaGen App initialized but authentication failed")
+            st.warning("⚠️ Authentication failed. Some features may be limited.")
 
-        self.client_ready = client_ready
+    def ensure_client_ready(self) -> bool:
+        """Ensure Databricks client is initialized (lazy initialization)."""
+        if self.client_ready is None:
+            logger.info("🔄 Performing lazy client initialization...")
+            self.client_ready = DatabricksClientManager.setup_client()
+
+            if self.client_ready:
+                logger.info("✅ Lazy client initialization successful")
+            else:
+                logger.error("❌ Lazy client initialization failed")
+
+        return self.client_ready
 
     def run(self):
         """Main app execution - clean and organized."""
@@ -64,10 +74,15 @@ class DBXMetaGenApp:
 
         selected_section = st.radio(
             "Navigate:",
-            ["📋 Tables & Jobs", "📊 Results", "✏️ Review Metadata", "❓ Help"],
+            [
+                "📋 Tables & Jobs",
+                # "📊 Results",
+                "✏️ Review Metadata",
+                "❓ Help",
+            ],
             index=[
                 "📋 Tables & Jobs",
-                "📊 Results",
+                # "📊 Results",
                 "✏️ Review Metadata",
                 "❓ Help",
             ].index(st.session_state.current_section),
@@ -103,10 +118,44 @@ class DBXMetaGenApp:
         if st.sidebar.button("Show Debug Info"):
             st.sidebar.write("**System Status:**")
 
+            # Try lazy initialization for debug info
+            client_ready = self.ensure_client_ready()
+
             if st.session_state.get("workspace_client"):
-                st.sidebar.write("- Workspace Client: ✅ Connected")
+                try:
+                    user_info = st.session_state.workspace_client.current_user.me()
+                    st.sidebar.write("- Workspace Client: ✅ Connected")
+                    st.sidebar.write(f"  - Client User: {user_info.user_name}")
+                    st.sidebar.write(
+                        f"  - Auth Type: {st.session_state.get('auth_method', 'Unknown')}"
+                    )
+
+                    # Show hybrid user tracking info
+                    if st.session_state.get("app_user"):
+                        st.sidebar.write(
+                            f"  - App User: {st.session_state.get('app_user')}"
+                        )
+                    if st.session_state.get("service_principal"):
+                        st.sidebar.write(
+                            f"  - Service Principal: {st.session_state.get('service_principal')}"
+                        )
+                    if st.session_state.get("deploying_user"):
+                        st.sidebar.write(
+                            f"  - Deploying User: {st.session_state.get('deploying_user')}"
+                        )
+
+                except Exception as e:
+                    st.sidebar.write(
+                        "- Workspace Client: ⚠️ Connected but can't get user info"
+                    )
+                    st.sidebar.write(f"  - Error: {str(e)}")
             else:
                 st.sidebar.write("- Workspace Client: ❌ Not initialized")
+                st.sidebar.write(f"  - Setup Result: {client_ready}")
+                if not client_ready:
+                    st.sidebar.write(
+                        f"  - Auth Method: {st.session_state.get('auth_method', 'Unknown')}"
+                    )
 
             if st.session_state.get("config"):
                 st.sidebar.write(f"- Config: ✅ {len(st.session_state.config)} keys")

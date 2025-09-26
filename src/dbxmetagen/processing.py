@@ -86,6 +86,23 @@ from src.dbxmetagen.overrides import (
 )
 from src.dbxmetagen.user_utils import sanitize_user_identifier, get_current_user
 
+
+def debug_print(message: str, config=None):
+    """Print debug messages only when debug_mode is enabled"""
+    debug_enabled = False
+
+    if config and hasattr(config, "debug_mode"):
+        debug_enabled = config.debug_mode
+    elif config and hasattr(config, "__dict__") and "debug_mode" in config.__dict__:
+        debug_enabled = config.__dict__["debug_mode"]
+    else:
+        # Fallback: check environment variable
+        debug_enabled = os.getenv("DEBUG", "false").lower() == "true"
+
+    if debug_enabled:
+        print(message)
+
+
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(funcName)s - %(message)s",
@@ -392,7 +409,7 @@ def rows_to_df(rows: List[Row], config: MetadataConfig) -> DataFrame:
         )
 
         # Sample a few rows to see what data we're working with
-        print(f"[DEBUG] Sample rows being converted:")
+        debug_print(f"[DEBUG] Sample rows being converted:", config)
         for i, row in enumerate(rows[:3]):  # Show first 3 rows
             print(f"  Row {i}: {dict(row.asDict())}")
             # Check for any problematic values
@@ -698,8 +715,10 @@ def df_column_to_excel_file(
 def populate_log_table(df, config, current_user, base_path):
     # For serverless compatibility, ensure consistent data types without forcing string conversion
     # This maintains compatibility with existing table schemas
-    print(f"[DEBUG] populate_log_table called for mode: {config.mode}")
-    print(f"[DEBUG] Input df count before populate_log_table: {df.count()}")
+    debug_print(f"[DEBUG] populate_log_table called for mode: {config.mode}", config)
+    debug_print(
+        f"[DEBUG] Input df count before populate_log_table: {df.count()}", config
+    )
 
     # CRITICAL FIX: Explicitly cast all literal columns for serverless compatibility
     result_df = (
@@ -712,17 +731,23 @@ def populate_log_table(df, config, current_user, base_path):
         .withColumn("status", lit("No Volume specified...").cast("string"))
     )
 
-    print(f"[DEBUG] populate_log_table completed")
-    print(f"[DEBUG] Result df count after populate_log_table: {result_df.count()}")
+    debug_print(f"[DEBUG] populate_log_table completed", config)
+    debug_print(
+        f"[DEBUG] Result df count after populate_log_table: {result_df.count()}", config
+    )
 
     # CRITICAL SERVERLESS FIX: Ensure column_content stays as string after adding log columns
     if config.mode == "comment" and "column_content" in result_df.columns:
-        print(f"[DEBUG] Re-casting column_content to string after populate_log_table")
+        debug_print(
+            f"[DEBUG] Re-casting column_content to string after populate_log_table",
+            config,
+        )
         result_df = result_df.withColumn(
             "column_content", col("column_content").cast("string")
         )
-        print(f"[DEBUG] Final schema after re-casting:")
-        result_df.printSchema()
+        debug_print(f"[DEBUG] Final schema after re-casting:", config)
+        if config and getattr(config, "debug_mode", False):
+            result_df.printSchema()
 
     return result_df
 
@@ -943,6 +968,14 @@ def _export_table_to_tsv(df, config):
         return False
 
 
+def eval_disable_medical_information_value(config: MetadataConfig) -> bool:
+    return (
+        config.disable_medical_information_value == "true"
+        or config.disable_medical_information_value
+        or config.disable_medical_information_value == "True"
+    )
+
+
 class ExportError(Exception):
     """Custom exception for export errors."""
 
@@ -1071,6 +1104,9 @@ def _export_table_to_excel(df: Any, config: Any) -> str:
 def log_metadata_generation(
     df: DataFrame, config: MetadataConfig, table_name: str, volume_name: str
 ) -> None:
+    """
+    Log the metadata generation to the log table.
+    """
     run_log_table_ddl(config)
     df.write.mode("append").option("mergeSchema", "true").saveAsTable(
         f"{config.catalog_name}.{config.schema_name}.{config.mode}_metadata_generation_log"
@@ -1079,13 +1115,19 @@ def log_metadata_generation(
 
 
 def set_classification_to_null(df: DataFrame, config: MetadataConfig) -> DataFrame:
+    """
+    Set the classification to null.
+    """
     if config.mode == "pi":
         df = df.withColumn("classification", lit(None))
     return df
 
 
 def set_protected_classification(df: DataFrame, config: MetadataConfig) -> DataFrame:
-    if df is None:
+    """
+    Set the classification to protected.
+    """
+    if not df:
         return None
 
     if config.mode == "pi":
@@ -1105,10 +1147,13 @@ def set_protected_classification(df: DataFrame, config: MetadataConfig) -> DataF
 def replace_medical_information_with_phi(
     df: DataFrame, config: MetadataConfig
 ) -> DataFrame:
-    if df is None:
+    """
+    Replace the medical information with phi.
+    """
+    if not df:
         return None
 
-    if config.mode == "pi" and config.disable_medical_information_value == "true":
+    if config.mode == "pi" and eval_disable_medical_information_value(config):
         df = df.withColumn(
             "type",
             when((df["type"] == "medical_information"), lit("phi")).otherwise(
@@ -1816,10 +1861,17 @@ def process_and_add_ddl(config: MetadataConfig, table_name: str) -> DataFrame:
     column_df = hardcode_classification(column_df, config)
     print(f"[DEBUG] column_df schema after hardcode: {column_df.schema}")
     print(f"[DEBUG] column_df count after hardcode: {column_df.count()}")
-    table_df = split_name_for_df(table_df)
-    print(f"[DEBUG] table_df schema after split: {table_df.schema}")
-    print(f"[DEBUG] table_df count after split: {table_df.count()}")
-    table_df = hardcode_classification(table_df, config)
+
+    # Handle table_df which can be None in PI mode
+    if table_df is not None:
+        table_df = split_name_for_df(table_df)
+        print(f"[DEBUG] table_df schema after split: {table_df.schema}")
+        print(f"[DEBUG] table_df count after split: {table_df.count()}")
+        table_df = hardcode_classification(table_df, config)
+    else:
+        print(
+            f"[DEBUG] table_df is None (expected in PI mode) - skipping table-level processing"
+        )
     if config.allow_manual_override:
         logger.info("Overriding metadata from CSV...")
         column_df = override_metadata_from_csv(
@@ -1929,8 +1981,13 @@ def add_ddl_to_dfs(config, table_df, column_df, table_name):
                         )
                     raise
 
-        summarized_table_df = summarize_table_content(table_df, config, table_name)
-        summarized_table_df = split_name_for_df(summarized_table_df)
+        # Handle table_df which can be None in PI mode
+        if table_df is not None:
+            summarized_table_df = summarize_table_content(table_df, config, table_name)
+            summarized_table_df = split_name_for_df(summarized_table_df)
+        else:
+            print(f"[DEBUG] table_df is None - skipping table content summarization")
+            summarized_table_df = None
 
         # CRITICAL SERVERLESS FIX: Ensure column_content remains string after all transformations
         if column_df is not None and "column_content" in column_df.columns:
@@ -2106,11 +2163,13 @@ def setup_ddl(config: MetadataConfig) -> None:
             f"CREATE SCHEMA IF NOT EXISTS {config.catalog_name}.{config.schema_name};"
         )
     volume_sql = f"CREATE VOLUME IF NOT EXISTS {config.catalog_name}.{config.schema_name}.{config.volume_name};"
-    print(f"DEBUG: About to execute volume SQL: {volume_sql}")
-    print(f"DEBUG: catalog_name = '{config.catalog_name}'")
-    print(f"DEBUG: schema_name = '{config.schema_name}'")
-    print(f"DEBUG: volume_name = '{config.volume_name}'")
-    print(f"DEBUG: current_user = '{getattr(config, 'current_user', 'NOT_SET')}'")
+    debug_print(f"DEBUG: About to execute volume SQL: {volume_sql}", config)
+    debug_print(f"DEBUG: catalog_name = '{config.catalog_name}'", config)
+    debug_print(f"DEBUG: schema_name = '{config.schema_name}'", config)
+    debug_print(f"DEBUG: volume_name = '{config.volume_name}'", config)
+    debug_print(
+        f"DEBUG: current_user = '{getattr(config, 'current_user', 'NOT_SET')}'", config
+    )
 
     if config.volume_name:
         spark.sql(volume_sql)
@@ -2618,6 +2677,7 @@ def _create_table_pi_information_ddl_func():
     def table_pi_information_ddl(
         table_name: str, classification: str, pi_type: str
     ) -> str:
+        # Debug statements removed - enable via debug_mode if needed
         return f"ALTER TABLE {table_name} SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
 
     return table_pi_information_ddl
@@ -2627,6 +2687,7 @@ def _create_pi_information_ddl_func():
     def pi_information_ddl(
         table_name: str, column_name: str, classification: str, pi_type: str
     ) -> str:
+        # Debug statements removed - enable via debug_mode if needed
         return f"ALTER TABLE {table_name} ALTER COLUMN `{column_name}` SET TAGS ('data_classification' = '{classification}', 'data_subclassification' = '{pi_type}');"
 
     return pi_information_ddl

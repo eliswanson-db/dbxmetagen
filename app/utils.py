@@ -188,12 +188,13 @@ class ConfigManager:
             st.error(f"Error loading variables.yml: {str(e)}")
             return ConfigManager.get_builtin_defaults()
 
+    # TODO: duplicating defaults in multiple places, need to consolidate, and fetch from variables.yml
     @staticmethod
     def get_builtin_defaults() -> Dict[str, Any]:
         """Get built-in default configuration"""
         return {
-            "catalog_name": "dbxmetagen",
-            "host": "https://adb-830292400663869.9.azuredatabricks.net/",
+            "catalog_name": os.getenv("APP_NAME", "dbxmetagen"),
+            "host": os.getenv("HOST"),
             "allow_data": True,
             "sample_size": 5,
             "mode": "comment",

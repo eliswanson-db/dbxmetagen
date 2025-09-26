@@ -13,6 +13,7 @@ import base64
 
 from core.config import ConfigManager, DatabricksClientManager
 from core.jobs import JobManager
+from core.user_context import AppConfig
 from core.data_ops import DataOperations, MetadataProcessor
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,25 @@ class UIComponents:
         # Job manager will be initialized when workspace client is available
         self._job_manager = None
 
+    def _ensure_client_ready(self) -> bool:
+        """Ensure Databricks client is initialized (lazy initialization)."""
+        if not st.session_state.get("workspace_client"):
+            logger.info("🔄 Performing lazy client initialization for UI action...")
+            client_ready = DatabricksClientManager.setup_client()
+            if client_ready:
+                logger.info("✅ Lazy client initialization successful")
+            else:
+                logger.error("❌ Lazy client initialization failed")
+            return client_ready
+        return True
+
     @property
     def job_manager(self):
-        """Get job manager, initializing if needed"""
-        if self._job_manager is None and st.session_state.get("workspace_client"):
-            self._job_manager = JobManager(st.session_state.workspace_client)
+        """Get job manager with lazy client initialization"""
+        if self._job_manager is None:
+            # Ensure client is ready with lazy initialization
+            if self._ensure_client_ready() and st.session_state.get("workspace_client"):
+                self._job_manager = JobManager(st.session_state.workspace_client)
         return self._job_manager
 
     def render_sidebar_config(self):
@@ -63,7 +78,9 @@ class UIComponents:
 
             catalog_name = st.text_input(
                 "Catalog Name",
-                value=st.session_state.config.get("catalog_name", "dbxmetagen"),
+                value=st.session_state.config.get(
+                    "catalog_name", AppConfig.get_app_name()
+                ),
                 help="Unity Catalog name for storing results",
             )
 
@@ -85,31 +102,51 @@ class UIComponents:
                 "Sample Size",
                 min_value=0,
                 max_value=1000,
-                value=st.session_state.config.get("sample_size", 100),
+                value=st.session_state.config.get("sample_size", 10),
                 help="Number of rows to sample per column (0 = no sampling)",
+            )
+
+            columns_per_call = st.number_input(
+                "Columns Per Call",
+                min_value=1,
+                max_value=100,
+                value=st.session_state.config.get("columns_per_call", 10),
+                help="Number of columns to process per call",
             )
 
             mode = st.selectbox(
                 "Processing Mode",
-                options=["comments", "pii"],
-                index=["comments", "pii"].index(
-                    st.session_state.config.get("mode", "pii")
+                options=["comment", "pi"],
+                index=["comment", "pi"].index(
+                    st.session_state.config.get("mode", "pi")
                 ),
                 help="What to generate: comments or PII classification.",
             )
 
             st.subheader("🚀 Execution Settings")
 
-            cluster_size = st.selectbox(
-                "Cluster Size",
-                options=["small", "medium", "large"],
-                index=["small", "medium", "large"].index(
-                    st.session_state.config.get("cluster_size", "small")
-                ),
+            # Authentication mode selection
+            use_obo = st.checkbox(
+                "🔐 Use On-Behalf-Of (OBO) Authentication",
+                value=st.session_state.config.get(
+                    "use_obo", True
+                ),  # Default to OBO for easier setup
+                help="If checked, jobs run with your user permissions. If unchecked, jobs run with app service principal permissions.",
             )
 
+            # TODO: Remove cluster_size settings - hiding for now but keeping for backwards compatibility
+            # cluster_size = st.selectbox(
+            #     "Cluster Size",
+            #     options=["small", "medium", "large"],
+            #     index=["small", "medium", "large"].index(
+            #         st.session_state.config.get("cluster_size", "small")
+            #     ),
+            # )
+            # Hidden but defaulted to medium for jobs
+            cluster_size = "medium"
+
             apply_ddl = st.checkbox(
-                "⚠️ Apply DDL (DANGEROUS)",
+                "⚠️ Apply DDL (CAUTION)",
                 value=st.session_state.config.get("apply_ddl", False),
                 help="WARNING: This will directly modify your tables!",
             )
@@ -122,9 +159,11 @@ class UIComponents:
                         "schema_name": schema_name,
                         "allow_data": allow_data,
                         "sample_size": sample_size,
+                        "columns_per_call": columns_per_call,
                         "mode": mode,
                         "cluster_size": cluster_size,
                         "apply_ddl": apply_ddl,
+                        "use_obo": use_obo,
                     }
                 )
 
@@ -355,7 +394,9 @@ class UIComponents:
         with col1:
             catalog = st.text_input(
                 "Catalog",
-                value=st.session_state.config.get("catalog_name", "dbxmetagen"),
+                value=st.session_state.config.get(
+                    "catalog_name", AppConfig.get_app_name()
+                ),
             )
 
         with col2:
@@ -408,7 +449,9 @@ class UIComponents:
         with col1:
             catalog = st.text_input(
                 "Catalog",
-                value=st.session_state.config.get("catalog_name", "dbxmetagen"),
+                value=st.session_state.config.get(
+                    "catalog_name", AppConfig.get_app_name()
+                ),
                 key="review_catalog",
             )
 
@@ -426,10 +469,75 @@ class UIComponents:
                 key="review_volume",
             )
 
-        if st.button("📥 Load Metadata for Review", key="load_metadata_review_btn"):
+        # File selection section
+        st.subheader("📁 Select File to Review")
+
+        # Button to scan for available files
+        if st.button("🔍 Scan for Available Files", key="scan_files_button"):
+            with st.spinner("Scanning for metadata files..."):
+                available_files = (
+                    self.metadata_processor.get_available_files_from_volume(
+                        catalog, schema, volume
+                    )
+                )
+                if available_files:
+                    st.session_state.available_review_files = available_files
+                    st.session_state.selected_review_file = None  # Reset selection
+                    st.success(f"✅ Found {len(available_files)} metadata files")
+                else:
+                    st.session_state.available_review_files = []
+                    st.warning("No metadata files found in the specified location")
+
+        # File selection dropdown (only show if files are available)
+        if st.session_state.get("available_review_files"):
+            available_files = st.session_state.available_review_files
+
+            # Create display options for selectbox
+            file_options = []
+            for file_info in available_files:
+                size_mb = (
+                    file_info["size"] / (1024 * 1024) if file_info["size"] > 0 else 0
+                )
+                display_name = (
+                    f"{file_info['name']} ({file_info['type']}, {size_mb:.1f}MB)"
+                )
+                file_options.append(display_name)
+
+            # Add timestamp info to help identify files
+            selected_index = st.selectbox(
+                "Select file to review:",
+                range(len(file_options)),
+                format_func=lambda i: file_options[i],
+                key="file_selection_dropdown",
+                help="Files are sorted with most recent first",
+            )
+
+            # Store selected file info
+            if selected_index is not None:
+                st.session_state.selected_review_file = available_files[selected_index]
+                selected_file = available_files[selected_index]
+
+                # Show file details
+                st.info(
+                    f"Selected: **{selected_file['name']}** ({selected_file['type']}, {selected_file['size']/(1024*1024):.1f}MB)"
+                )
+
+        # Load button (only show if file is selected or fallback to auto-select)
+        load_button_text = (
+            "🔍 Load Selected File"
+            if st.session_state.get("selected_review_file")
+            else "📥 Load Most Recent File"
+        )
+
+        if st.button(load_button_text, key="load_metadata_review_btn"):
             with st.spinner("Loading metadata from volume..."):
+                # Use selected file if available, otherwise load most recent
+                selected_file_path = None
+                if st.session_state.get("selected_review_file"):
+                    selected_file_path = st.session_state.selected_review_file["path"]
+
                 df = self.metadata_processor.load_metadata_from_volume(
-                    catalog, schema, volume
+                    catalog, schema, volume, selected_file_path
                 )
                 if df is not None:
                     st.session_state.review_metadata = df
@@ -473,7 +581,7 @@ class UIComponents:
 
             st.subheader("💾 Save & Apply Changes")
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
 
             with col1:
                 if st.button("💾 Save Reviewed Metadata"):
@@ -483,17 +591,6 @@ class UIComponents:
                 if st.button("✅ Apply to Tables"):
                     self._apply_metadata(edited_df)
 
-            with col3:
-                if st.button("🚀 Create Sync Job"):
-                    if not self.job_manager:
-                        st.error(
-                            "❌ Databricks client not initialized. Please check connection."
-                        )
-                    else:
-                        self.job_manager.create_sync_metadata_job(
-                            edited_df, "reviewed_metadata"
-                        )
-
     def _save_reviewed_metadata(self, df: pd.DataFrame):
         """Save reviewed metadata back to volume with _reviewed suffix."""
         if not st.session_state.get("review_metadata_original_path"):
@@ -501,8 +598,8 @@ class UIComponents:
             return
 
         try:
-            # Generate DDL from edited comments before saving
-            st.info("🔄 Generating DDL from edited comments...")
+            # Generate DDL from edited metadata before saving
+            st.info("🔄 Generating DDL from edited metadata...")
             updated_df = self.metadata_processor._generate_ddl_from_comments(df)
             st.session_state.review_metadata = (
                 updated_df  # Update session state with new DDL
@@ -515,7 +612,9 @@ class UIComponents:
                 return
 
             current_user = st.session_state.workspace_client.current_user.me().user_name
-            sanitized_user = current_user.replace("@", "_").replace(".", "_")
+            sanitized_user = (
+                current_user.replace("@", "_").replace(".", "_").replace("-", "_")
+            )
             current_date = datetime.now().strftime("%Y%m%d")
 
             # Construct the output path with _reviewed suffix
@@ -563,6 +662,15 @@ class UIComponents:
 
     def _apply_metadata(self, df: pd.DataFrame):
         """Apply metadata changes to tables."""
+        # Recheck authentication before applying metadata
+        from core.config import DatabricksClientManager
+
+        if not DatabricksClientManager.recheck_authentication():
+            st.error(
+                "❌ Authentication check failed. Please refresh the page and try again."
+            )
+            return
+
         if not self.job_manager:
             st.error("❌ Databricks client not initialized. Please check connection.")
             return
@@ -609,7 +717,8 @@ class UIComponents:
         try:
             yaml_content = yaml.dump(st.session_state.config, default_flow_style=False)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"dbxmetagen_config_{timestamp}.yml"
+            app_name = AppConfig.get_app_name()
+            filename = f"{app_name}_config_{timestamp}.yml"
 
             st.sidebar.download_button(
                 label="📥 Download Config",

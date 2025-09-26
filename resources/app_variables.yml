@@ -1,0 +1,20 @@
+variables:
+  app_deployment_type:
+    description: |
+      Type of app deployment. 
+      - USER means that when the app deploys, the app service principal will have CAN MANAGE RUN on the jobs, but the jobs run as the deploying user. 
+      - SPN means that the jobs will be created by the app service principal on first job run and CAN MANAGE RUN granted to the app user.
+      The distinction is very important. 
+        - In the first situation, the deploying user or SPN will have CAN MANAGE RUN on the jobs, but the jobs run as the deploying user.
+        - In the second situation, the jobs will be created by the app service principal on first job run and CAN MANAGE RUN granted to the app user. 
+        - Once On-Behalf-Of is available for job runs there will be an option added to deploy the app with OBO enabled, and this will be the default.
+    default: "USER"
+  app_name:
+    description: "Name of the app"
+    default: "dbxmetagen-app"
+  app_service_principal_application_id:
+    description: Application ID of the service principal used for the Databricks app. This service principal will be granted CAN_MANAGE permissions on the bundle resources. If not set, the app will use the current user context.
+    default: ${workspace.current_user.userName}
+  debug_mode:
+    description: Enable debug mode for detailed logging and debugging features in the application and jobs. Set to true for development environments.
+    default: false

@@ -12,11 +12,28 @@ if [ ! -f "databricks.yml" ]; then
     exit 1
 fi
 
-if ! databricks current-user me &> /dev/null; then
+if ! databricks current-user me --profile DEFAULT &> /dev/null; then
     echo "Error: Not authenticated with Databricks. Run: databricks configure"
     exit 1
 fi
 
+CURRENT_USER=$(databricks current-user me --profile DEFAULT --output json | jq -r '.userName')
+
+check_for_deployed_app() {
+    SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
+    if [ -n "$SP_ID" ]; then
+        export APP_SP_ID="$SP_ID"
+    else        
+        echo "App does not exist. Running initial deployment to get app SP ID..."
+        validate_bundle
+        deploy_bundle
+        SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
+        export APP_SP_ID="$SP_ID"
+    fi
+}
+
+# Do we need this for customer deployment? I don't think we do anymore.
+# Commenting out where this is used for now.
 create_secret_scope() {
     local scope_name="dbxmetagen"
     
@@ -92,14 +109,22 @@ run_permissions_setup() {
 }
 
 start_app() {
-    if databricks apps list --output json 2>/dev/null | grep -q "dbxmetagen-app"; then
-        echo "Starting app..."
-        databricks apps start dbxmetagen-app 2>/dev/null || true
-        databricks apps deploy dbxmetagen-app 2>/dev/null || true
-        echo "App deployment complete"
-    else
-        echo "Warning: App not found in workspace"
-    fi
+    #echo "Starting app..."
+    #APP_ID=$(databricks apps list --output json | jq -r ".[] | select(.name==\"dbxmetagen-app\") | .id")
+    echo "App ID: $APP_ID"
+    #SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.service_principal.application_id')
+    echo "Service Principal ID: $APP_SP_ID"
+
+    # 3. Inject SP ID into bundle (adjust as appropriate for your templating/vars strategy)
+    # export APP_SP_ID="$SP_ID"
+    # if app_service_principal_application_id=$CURRENT_USER; then
+    #     export APP_SP_ID="$SP_ID"
+    # fi
+    #envsubst < databricks.yml > databricks.bundle.final.yml
+
+    # 4. Deploy all resources (with permissions now referencing the SP ID)
+    #databricks bundle deploy --target=$TARGET --var="app_service_principal_application_id=$SP_ID"
+    databricks bundle run -t $TARGET --var="{deploying_user=$CURRENT_USER,app_service_principal_application_id=$APP_SP_ID}" dbxmetagen_app
 }
 
 # Parse arguments
@@ -107,6 +132,7 @@ RUN_PERMISSIONS=false
 DEBUG_MODE=false
 CREATE_TEST_DATA=false
 TARGET="dev"
+PROFILE="DEFAULT"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -148,21 +174,25 @@ done
 echo "DBX MetaGen Deployment"
 echo "Target: $TARGET"
 
-# Copy variables to app folder if it exists
+#Copy variables to app folder if it exists
 if [ -f "variables.yml" ]; then
-    cp variables.yml app/ 2>/dev/null || true
+   cp variables.yml app/ 2>/dev/null || true
 fi
 
 # Deploy everything
-create_secret_scope
+#create_secret_scope
+check_for_deployed_app
 validate_bundle
 deploy_bundle
 start_app
 
-# Run permissions if requested
+#Run permissions if requested
 if [ "$RUN_PERMISSIONS" = true ]; then
-        run_permissions_setup
+       run_permissions_setup
 fi
 
 echo "Deployment complete!"
 echo "Access your app in Databricks workspace > Apps > dbxmetagen-app"
+
+
+

@@ -78,11 +78,13 @@ class MetadataConfig:
         for key, value in self.model_params.items():
             setattr(self, key, value)
 
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
+        # Load YAML first as defaults
         yaml_variables = self.load_yaml()
         for key, value in yaml_variables.items():
+            setattr(self, key, value)
+
+        # Then override with any passed parameters
+        for key, value in kwargs.items():
             setattr(self, key, value)
 
         self.instantiate_environments()

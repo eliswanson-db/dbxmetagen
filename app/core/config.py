@@ -153,6 +153,41 @@ class DatabricksClientManager:
         return st.session_state.get("workspace_client") is not None
 
     @staticmethod
+    def recheck_authentication() -> bool:
+        """
+        Recheck authentication before critical operations like job runs.
+        This enables future OBO (On-Behalf-Of) authentication support.
+
+        Returns:
+            bool: True if authentication is valid, False otherwise
+        """
+        logger.info("🔄 Rechecking authentication for job operation...")
+
+        # For now, just verify the existing client is still valid
+        if not st.session_state.get("workspace_client"):
+            logger.warning("❌ No active client found, attempting re-authentication")
+            return DatabricksClientManager.setup_client()
+
+        try:
+            # Test current client connection
+            client = st.session_state.workspace_client
+            user_info = client.current_user.me()
+            logger.info(
+                f"✅ Authentication recheck successful - user: {user_info.user_name}"
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"⚠️ Authentication recheck failed: {str(e)}")
+            logger.info("🔄 Attempting re-authentication...")
+
+            # Clear the failed client and try again
+            if "workspace_client" in st.session_state:
+                del st.session_state.workspace_client
+
+            return DatabricksClientManager.setup_client()
+
+    @staticmethod
     def _validate_environment() -> Optional[str]:
         """
         Validate required environment variables.
@@ -208,7 +243,7 @@ class DatabricksClientManager:
     @staticmethod
     def _create_authenticated_client(host: str) -> Optional[WorkspaceClient]:
         """
-        Create Databricks client with best available authentication.
+        Create Databricks client using On-Behalf-Of (OBO) authentication.
 
         Args:
             host: Databricks workspace host URL
@@ -217,19 +252,98 @@ class DatabricksClientManager:
             WorkspaceClient: Authenticated client or None if failed
         """
         try:
-            # Try user token authentication first
+            # Hybrid authentication: Try OBO first, fallback to service principal
+            logger.info("🔍 Starting hybrid authentication (OBO + Service Principal)")
+
+            # First, try to identify the actual app user from headers/context
+            actual_user = DatabricksClientManager._identify_app_user()
+
+            # Try OBO token authentication
             user_token = DatabricksClientManager._extract_user_token()
 
             if user_token:
-                logger.info("Creating client with user token authentication")
-                return WorkspaceClient(host=host, token=user_token)
+                logger.info("✅ Found OBO user token, attempting OBO authentication")
+                try:
+                    client = WorkspaceClient(host=host, token=user_token)
+                    test_user = client.current_user.me()
+                    logger.info(
+                        f"✅ OBO authentication successful - user: {test_user.user_name}"
+                    )
+
+                    # Store app-wide user info
+                    if hasattr(st, "session_state"):
+                        st.session_state.auth_method = "OBO (x-forwarded-access-token)"
+                        st.session_state.app_user = test_user.user_name
+                        try:
+                            st.session_state.deploying_user = (
+                                UserContextManager.get_deploying_user()
+                            )
+                        except ValueError as e:
+                            logger.error(f"Failed to get deploying user: {e}")
+                            st.session_state.deploying_user = "unknown"
+                        logger.info(
+                            f"🔍 App-wide user tracking - User: {test_user.user_name}, Deployer: {st.session_state.deploying_user}"
+                        )
+
+                    return client
+
+                except Exception as obo_error:
+                    logger.warning(
+                        f"⚠️ OBO token found but authentication failed: {str(obo_error)}"
+                    )
+                    logger.info("🔄 Falling back to service principal authentication")
             else:
-                logger.info("Creating client with default authentication")
-                return WorkspaceClient(host=host)
+                logger.info(
+                    "ℹ️ No OBO token found - using service principal authentication"
+                )
+
+            # Fallback to service principal authentication (but track actual user)
+            logger.info("🔄 Using service principal authentication with user tracking")
+            client = WorkspaceClient(host=host)
+
+            # Test the service principal client
+            sp_user = client.current_user.me()
+            logger.info(
+                f"✅ Service principal authentication successful - SP: {sp_user.user_name}"
+            )
+
+            # Store app-wide user info (service principal + actual user if identified)
+            if hasattr(st, "session_state"):
+                st.session_state.auth_method = "Service Principal (hybrid)"
+                st.session_state.service_principal = sp_user.user_name
+                st.session_state.app_user = actual_user if actual_user else "unknown"
+                try:
+                    st.session_state.deploying_user = (
+                        UserContextManager.get_deploying_user()
+                    )
+                except ValueError as e:
+                    logger.error(f"Failed to get deploying user: {e}")
+                    st.session_state.deploying_user = "unknown"
+
+                logger.info(
+                    f"🔍 App-wide user tracking - SP: {sp_user.user_name}, User: {actual_user}, Deployer: {st.session_state.deploying_user}"
+                )
+
+            return client
 
         except Exception as e:
-            logger.error(f"Failed to create Databricks client: {str(e)}")
-            return None
+            logger.error(f"❌ Failed to create OBO Databricks client: {str(e)}")
+            logger.info("🔄 Attempting fallback authentication for debugging...")
+
+            # Try fallback authentication
+            try:
+                logger.info("🔄 Attempting minimal fallback authentication...")
+                client = WorkspaceClient(host=host)
+                if hasattr(st, "session_state"):
+                    st.session_state.auth_method = "Fallback (minimal config)"
+                return client
+            except Exception as fallback_error:
+                logger.error(
+                    f"❌ All authentication methods failed: {str(fallback_error)}"
+                )
+                if hasattr(st, "session_state"):
+                    st.session_state.auth_method = "Failed"
+                return None
 
     @staticmethod
     def _test_client_connection(client: WorkspaceClient) -> Optional[Dict[str, str]]:
@@ -290,11 +404,13 @@ class DatabricksClientManager:
     @staticmethod
     def _extract_user_token() -> Optional[str]:
         """
-        Extract user token from various sources with improved error handling.
+        Extract user token from various sources with detailed debugging.
 
         Returns:
             str: User token if found, None otherwise
         """
+        logger.info("🔍 Starting user token extraction...")
+
         token_sources = [
             DatabricksClientManager._try_streamlit_context_token,
             DatabricksClientManager._try_query_params_token,
@@ -302,46 +418,152 @@ class DatabricksClientManager:
         ]
 
         for source_func in token_sources:
+            logger.info(f"🔍 Trying token source: {source_func.__name__}")
             try:
                 token = source_func()
                 if token:
-                    logger.debug(f"Token found via {source_func.__name__}")
+                    logger.info(f"✅ Token found via {source_func.__name__}")
+                    logger.info(f"🔍 Token length: {len(token)} characters")
+                    logger.info(
+                        f"🔍 Token prefix: {token[:10]}..."
+                        if len(token) > 10
+                        else f"🔍 Token: {token}"
+                    )
                     return token
+                else:
+                    logger.info(f"❌ No token from {source_func.__name__}")
             except Exception as e:
-                logger.debug(
-                    f"Token extraction failed for {source_func.__name__}: {str(e)}"
+                logger.error(
+                    f"❌ Token extraction failed for {source_func.__name__}: {str(e)}"
                 )
                 continue
 
-        logger.info("No user token found, will use default authentication")
+        logger.error("❌ No user token found from any source")
         return None
 
     @staticmethod
-    def _try_streamlit_context_token() -> Optional[str]:
-        """Extract token from Streamlit request context."""
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    def _identify_app_user() -> Optional[str]:
+        """
+        Identify the actual app user from headers/context, even without OBO token.
 
-        ctx = get_script_run_ctx()
-        if not ctx or not hasattr(ctx, "session_info"):
+        Returns:
+            str: User identifier if found, None otherwise
+        """
+        logger.info("🔍 Attempting to identify actual app user...")
+
+        # Try to get user info from Streamlit request headers
+        try:
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+            ctx = get_script_run_ctx()
+            if not ctx or not hasattr(ctx, "session_info"):
+                logger.info("❌ No Streamlit context for user identification")
+                return None
+
+            session_info = ctx.session_info
+            if not hasattr(session_info, "headers"):
+                logger.info("❌ No headers available for user identification")
+                return None
+
+            headers = session_info.headers
+
+            # Look for user identification headers (common in Databricks Apps)
+            user_headers = [
+                "x-forwarded-user",
+                "x-original-user",
+                "x-databricks-user",
+                "x-user-email",
+                "remote-user",
+            ]
+
+            for header_name in user_headers:
+                user_value = headers.get(header_name)
+                if user_value:
+                    logger.info(
+                        f"✅ Found user identifier in header {header_name}: {user_value}"
+                    )
+                    return user_value
+
+            logger.info("❌ No user identification headers found")
             return None
 
+        except Exception as e:
+            logger.error(f"❌ Error identifying app user: {str(e)}")
+            return None
+
+    @staticmethod
+    def _try_streamlit_context_token() -> Optional[str]:
+        """Extract token from Streamlit request context with detailed debugging."""
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        logger.info("🔍 Getting Streamlit script run context...")
+        ctx = get_script_run_ctx()
+
+        if not ctx:
+            logger.info("❌ No Streamlit script run context available")
+            return None
+
+        if not hasattr(ctx, "session_info"):
+            logger.info("❌ Script context has no session_info")
+            return None
+
+        logger.info("✅ Found script context with session_info")
         session_info = ctx.session_info
+
         if not hasattr(session_info, "headers"):
+            logger.info("❌ Session info has no headers")
             return None
 
         headers = session_info.headers
+        logger.info(f"✅ Found headers dictionary with {len(headers)} headers")
+
+        # Log all headers for debugging (be careful not to log sensitive data)
+        logger.info("🔍 Available headers:")
+        for header_name, header_value in headers.items():
+            if "token" in header_name.lower() or "auth" in header_name.lower():
+                # Log auth-related headers with partial values
+                value_preview = (
+                    f"{header_value[:10]}..."
+                    if len(header_value) > 10
+                    else header_value
+                )
+                logger.info(f"  - {header_name}: {value_preview}")
+            else:
+                # Log other headers normally (but truncate if very long)
+                value_preview = (
+                    header_value
+                    if len(header_value) < 50
+                    else f"{header_value[:47]}..."
+                )
+                logger.info(f"  - {header_name}: {value_preview}")
 
         # Try forwarded token headers
+        logger.info(
+            f"🔍 Looking for forwarded token headers: {DatabricksClientManager.FORWARDED_TOKEN_HEADERS}"
+        )
         for header_name in DatabricksClientManager.FORWARDED_TOKEN_HEADERS:
+            logger.info(f"🔍 Checking header: {header_name}")
             token = headers.get(header_name)
             if token:
+                logger.info(f"✅ Found token in header: {header_name}")
                 return token
+            else:
+                logger.info(f"❌ No token in header: {header_name}")
 
         # Try authorization header
+        logger.info("🔍 Checking authorization header...")
         auth_header = headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
+            logger.info("✅ Found Bearer token in authorization header")
             return auth_header.replace("Bearer ", "")
+        elif auth_header:
+            logger.info(
+                f"❌ Authorization header exists but doesn't start with 'Bearer ': {auth_header[:10]}..."
+            )
+        else:
+            logger.info("❌ No authorization header found")
 
+        logger.info("❌ No forwarded tokens found in any headers")
         return None
 
     @staticmethod

@@ -8,12 +8,19 @@ env:
   - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
     value: "false"
   - name: DEBUG
-    value: "true"
+    value: "false"
   # DATABRICKS_HOST is automatically provided by Databricks Apps
-  # Service principal authentication is handled automatically
+  # On-Behalf-Of (OBO) authentication uses forwarded user tokens
   - name: APP_ENV
     value: "dev"  # use "prod" in production deployments
+  # User context - pulled from variables.yml using valueFrom
   - name: DEPLOY_USER_NAME
-    value: ""  # optional: set to the deploying user's email (e.g., user@company.com)
-  - name: NOTEBOOK_PATH
-    value: "/Workspace/Users/eli.swanson@databricks.com/.bundle/dbxmetagen/dev/files/notebooks/generate_metadata"  # Use bundle user path
+    valueFrom: "deploying_user"
+  - name: APP_NAME  
+    valueFrom: "app_name"
+  - name: APP_SERVICE_PRINCIPAL
+    valueFrom: "app_service_principal_id"
+  - name: metadata_job_name
+    valueFrom: "metadata_generator_job"
+  - name: sync_ddl_job_name
+    valueFrom: "sync_ddl_job"

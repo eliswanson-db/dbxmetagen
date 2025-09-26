@@ -2,6 +2,12 @@ variables:
   catalog_name:
     description: Target catalog where data, models, and files are stored for this project. If source tables are in this catalog, then table names only have to be scoped with schema and table. If table names are in other catalogs then table names need to be fully scoped. Replace this catalog name with the main catalog you want to run dbxmetagen from.
     default: dbxmetagen
+  deploying_user:
+    description: User who deploys the asset bundle (for notebook paths).
+    default: ${workspace.current_user.userName}
+  bundle_target:
+    description: Bundle target environment (dev/prod).
+    default: ${bundle.target}
   host:
     description: Base url host variable. If using asset bundles, will get overridden by target host. Otherwise, use the host here that you want to target. Replace this example host name with a real one, specifically the one you will be using.
     default: https://adb-830292400663869.9.azuredatabricks.net/
@@ -124,7 +130,7 @@ variables:
     default: true
   columns_per_call:
     description: columns per call - this is the number of columns sent to the prompt per chunk
-    default: 5
+    default: 20
   max_tokens:
     description: maximum tokens for model
     default: 4096
@@ -184,9 +190,4 @@ variables:
   column_with_reviewed_ddl:
     description: When reviewing content and supplying it back to the sync process, do not modify the DDL column, modify the columns 'column_content' or 'type' and 'classification'. For the alternative column the specified option should just be 'other'. We will add an option to modify the DDL in a future release.
     default: other
-  app_service_principal_application_id:
-    description: Application ID of the service principal used for the Databricks app. This service principal will be granted CAN_MANAGE permissions on the bundle resources. If not set, the app will use the current user context.
-    default: ${workspace.current_user.userName}
-  debug_mode:
-    description: Enable debug mode for detailed logging and debugging features in the application and jobs. Set to true for development environments.
-    default: false
+

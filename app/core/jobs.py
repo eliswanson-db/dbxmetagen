@@ -16,54 +16,57 @@ from databricks.sdk.service.jobs import (
 )
 from databricks.sdk.service.compute import Environment
 
+from core.config import DatabricksClientManager
+from core.user_context import UserContextManager, AppConfig
+
 logger = logging.getLogger(__name__)
 
 
-class DBXJobManager:
-    """Handles Databricks job creation and monitoring - clean and simple"""
+# class DBXJobManager:
+#     """Handles Databricks job creation and monitoring - clean and simple"""
 
-    def __init__(self, workspace_client: WorkspaceClient):
-        self.workspace_client = workspace_client
+#     def __init__(self, workspace_client: WorkspaceClient):
+#         self.workspace_client = workspace_client
 
-    def create_metadata_job(
-        self,
-        job_name: str,
-        tables: List[str],
-        config: Dict[str, Any],
-        user_email: Optional[str] = None,
-    ) -> Tuple[int, int]:
-        """Create and run a metadata generation job"""
-        logger.info(f"Creating metadata job: {job_name}")
-        w = WorkspaceClient()
-        notebook_path = f"/Users/{w.current_user.me().user_name}/"
+#     def create_metadata_job(
+#         self,
+#         job_name: str,
+#         tables: List[str],
+#         config: Dict[str, Any],
+#         user_email: Optional[str] = None,
+#     ) -> Tuple[int, int]:
+#         """Create and run a metadata generation job"""
+#         logger.info(f"Creating metadata job: {job_name}")
+#         w = WorkspaceClient()
+#         notebook_path = f"/Users/{w.current_user.me().user_name}/"
 
-        if config.get("cluster_id"):
-            created_job = w.jobs.create(
-                name=f"sdk-{time.time_ns()}",
-                tasks=[
-                    jobs.Task(
-                        description="test",
-                        existing_cluster_id=config.get("cluster_id"),
-                        notebook_task=NotebookTask(notebook_path=notebook_path),
-                        task_key="test",
-                        timeout_seconds=0,
-                    )
-                ],
-            )
-        else:
-            created_job = w.jobs.create(
-                name=f"sdk-{time.time_ns()}",
-                tasks=[
-                    jobs.Task(
-                        description="test",
-                        notebook_task=jobs.NotebookTask(notebook_path=notebook_path),
-                        task_key="test",
-                        timeout_seconds=0,
-                    )
-                ],
-            )
+#         if config.get("cluster_id"):
+#             created_job = w.jobs.create(
+#                 name=f"sdk-{time.time_ns()}",
+#                 tasks=[
+#                     jobs.Task(
+#                         description="test",
+#                         existing_cluster_id=config.get("cluster_id"),
+#                         notebook_task=NotebookTask(notebook_path=notebook_path),
+#                         task_key="test",
+#                         timeout_seconds=0,
+#                     )
+#                 ],
+#             )
+#         else:
+#             created_job = w.jobs.create(
+#                 name=f"sdk-{time.time_ns()}",
+#                 tasks=[
+#                     jobs.Task(
+#                         description="test",
+#                         notebook_task=jobs.NotebookTask(notebook_path=notebook_path),
+#                         task_key="test",
+#                         timeout_seconds=0,
+#                     )
+#                 ],
+#             )
 
-        return created_job.job_id, created_job.run_id
+#         return created_job.job_id, created_job.run_id
 
 
 class JobManager:
@@ -191,21 +194,24 @@ class JobManager:
         self, tables: List[str], config: Dict[str, Any]
     ) -> Dict[str, str]:
         """Build job parameters for notebook execution"""
-        mode_value = config.get("mode", "comment")
+
+        # Get the job execution user (no hardcoded defaults)
+        job_user = UserContextManager.get_job_user(use_obo=config.get("use_obo", False))
+        catalog_name = AppConfig.get_catalog_name()
 
         return {
             "table_names": tables if isinstance(tables, str) else ",".join(tables),
             "env": "app",
             "cleanup_control_table": "true",
             # Core settings
-            "catalog_name": config.get("catalog_name", "dbxmetagen"),
+            "catalog_name": catalog_name,
             "host": config.get("host", ""),
             "schema_name": config.get("schema_name", "metadata_results"),
             "volume_name": config.get("volume_name", "generated_metadata"),
             # Data settings
             "allow_data": str(config.get("allow_data", False)).lower(),
             "sample_size": str(config.get("sample_size", 5)),
-            "mode": mode_value,
+            "mode": config.get("mode", "comment"),
             "allow_data_in_comments": str(
                 config.get("allow_data_in_comments", True)
             ).lower(),
@@ -225,6 +231,8 @@ class JobManager:
             "include_deterministic_pi": str(
                 config.get("include_deterministic_pi", True)
             ).lower(),
+            # Pass actual current user to override config
+            "current_user": job_user,
         }
 
     def _detect_node_type(self, config: Dict[str, Any]) -> str:
@@ -247,30 +255,56 @@ class JobManager:
             logger.info(f"Using explicit NOTEBOOK_PATH override: {explicit_path}")
             return explicit_path
 
-        # 2) Try current workspace user
+        # 2) With OBO, use the deploying user for notebook paths (not the app user)
         try:
-            current_user = self.workspace_client.current_user.me()
-            user_name = current_user.user_name
-
-            # Check if this looks like a real user email (not service principal GUID)
-            if "@" in user_name and not user_name.startswith("034f50f1"):
+            deploying_user = os.getenv("DEPLOY_USER_NAME")
+            if deploying_user:
                 bundle_target = config.get("bundle_target", "dev")
-                path = f"/Workspace/Users/{user_name}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
-                logger.info(f"Resolved notebook path for user {user_name}: {path}")
+                path = f"/Workspace/Users/{deploying_user}/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
+                logger.info(
+                    f"Resolved notebook path for deploying user {deploying_user}: {path}"
+                )
                 return path
             else:
-                logger.info(
-                    f"Current user appears to be service principal: {user_name}"
-                )
+                logger.info("DEPLOY_USER_NAME not set, continuing to fallback")
 
         except Exception as e:
-            logger.warning(f"Could not resolve current user path: {e}")
+            logger.warning(f"Could not resolve deploying user path: {e}")
 
-        # 3) Fallback to hardcoded path (TODO: make this dynamic)
-        bundle_target = config.get("bundle_target", "dev")
-        path = f"/Workspace/Users/eli.swanson@databricks.com/.bundle/dbxmetagen/{bundle_target}/files/notebooks/generate_metadata"
-        logger.info(f"Using fallback path: {path}")
-        return path
+        # 3) Use user context manager (no hardcoded fallbacks)
+        try:
+            app_name = AppConfig.get_app_name()
+            bundle_target = AppConfig.get_bundle_target()
+            use_shared = config.get("use_shared_bundle_location", False)
+
+            path = UserContextManager.get_notebook_path(
+                notebook_name="generate_metadata",
+                bundle_name=app_name,
+                bundle_target=bundle_target,
+                use_shared=use_shared,
+            )
+            logger.info(f"Using constructed path: {path}")
+            return path
+        except ValueError as e:
+            logger.error(f"Failed to construct notebook path: {e}")
+            raise ValueError(
+                f"Cannot determine notebook path. Ensure user context is properly configured: {e}"
+            )
+
+    def _find_job_by_name(self, job_name: str) -> Optional[int]:
+        """Find a job by name and return its ID"""
+        try:
+            jobs_list = self.workspace_client.jobs.list()
+            for job in jobs_list:
+                if job.settings and job.settings.name == job_name:
+                    logger.info(f"Found job '{job_name}' with ID: {job.job_id}")
+                    return job.job_id
+
+            logger.warning(f"Job '{job_name}' not found")
+            return None
+        except Exception as e:
+            logger.error(f"Error finding job '{job_name}': {e}")
+            return None
 
     def _find_existing_cluster(self) -> Optional[str]:
         """Find an existing cluster that can be reused"""
@@ -374,10 +408,19 @@ class JobManager:
     def create_and_run_metadata_job(self, tables: List[str]):
         """Create and run a metadata generation job with optimal configuration"""
         try:
-            job_name = f"dbxmetagen_job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # Recheck authentication before starting job operations
+            if not DatabricksClientManager.recheck_authentication():
+                st.error(
+                    "❌ Authentication check failed. Please refresh the page and try again."
+                )
+                return
+
+            app_name = AppConfig.get_app_name()
+            job_name = os.getenv("METADATA_JOB_NAME")
 
             # Use medium cluster size as a good default for production
             cluster_size = st.session_state.config.get("cluster_size", "medium")
+
             cluster_size_map = {
                 "small": "Small (1-2 workers)",
                 "medium": "Medium (2-4 workers)",
@@ -387,12 +430,36 @@ class JobManager:
                 cluster_size, "Medium (2-4 workers)"
             )
 
-            job_id, run_id = self.create_metadata_job(
-                job_name=job_name,
-                tables=tables,
-                cluster_size=cluster_size_display,
-                config=st.session_state.config,
+            # Find the predefined metadata job instead of creating new one
+            job_id = self._find_job_by_name(job_name)
+            if not job_id:
+                st.error(
+                    f"❌ Predefined job '{job_name}' not found. Please ensure the bundle is deployed correctly."
+                )
+                return
+
+            # Set up job parameters
+            job_user = UserContextManager.get_job_user(
+                use_obo=st.session_state.config.get("use_obo", False)
             )
+            catalog_name = AppConfig.get_catalog_name()
+
+            job_params = {
+                "table_names": "|".join(tables),
+                "mode": st.session_state.config.get("mode", "comment"),
+                "catalog_name": catalog_name,
+                "current_user": job_user,
+            }
+
+            # Set permissions for the job
+            current_user = UserContextManager.get_current_user()
+            AppConfig.set_app_permissions_for_job(str(job_id), current_user)
+
+            # Trigger the job run
+            run_response = self.workspace_client.jobs.run_now(
+                job_id=job_id, job_parameters=job_params
+            )
+            run_id = run_response.run_id
 
             # Store job run info for tracking (using run_id as key)
             if "job_runs" not in st.session_state:
@@ -404,7 +471,7 @@ class JobManager:
                 "run_id": run_id,
                 "tables": tables,
                 "config": st.session_state.config,
-                "cluster_size": cluster_size_display,
+                "job_type": "predefined_metadata_job",
                 "status": "RUNNING",
                 "start_time": datetime.now(),
                 "created_at": datetime.now().isoformat(),
@@ -439,9 +506,7 @@ class JobManager:
             from pandas import DataFrame
 
             job_parameters = {
-                "catalog_name": st.session_state.config.get(
-                    "catalog_name", "dbxmetagen"
-                ),
+                "catalog_name": AppConfig.get_catalog_name(),
                 "schema_name": st.session_state.config.get(
                     "schema_name", "metadata_results"
                 ),
@@ -456,17 +521,18 @@ class JobManager:
                 f"sync_reviewed_metadata_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
 
-            # Get notebook path using deploying user, not service principal
-            current_user = self.workspace_client.current_user.me().user_name
+            # With OBO, current_user is the actual app user
+            # But notebook path uses the deployer's bundle location
+            app_name = AppConfig.get_app_name()
+            bundle_target = AppConfig.get_bundle_target()
+            use_shared = config.get("use_shared_bundle_location", False)
 
-            # Check if current user is service principal, use deploying user instead
-            if "@" not in current_user or current_user.startswith("034f50f1"):
-                # This is a service principal, use the actual deploying user
-                deploying_user = "eli.swanson@databricks.com"  # From app.yml config
-                notebook_path = f"/Users/{deploying_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
-            else:
-                # This is a real user
-                notebook_path = f"/Users/{current_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+            notebook_path = UserContextManager.get_notebook_path(
+                notebook_name="sync_reviewed_ddl",
+                bundle_name=app_name,
+                bundle_target=bundle_target,
+                use_shared=use_shared,
+            )
 
             job = self.workspace_client.jobs.create(
                 environments=[
@@ -504,22 +570,31 @@ class JobManager:
     ) -> Tuple[int, int]:
         """Create and run a DDL sync job using sync_reviewed_ddl.py notebook"""
         try:
+            # Get job execution user based on OBO settings
+            use_obo = st.session_state.config.get("use_obo", False)
+            job_user = UserContextManager.get_job_user(use_obo=use_obo)
+
             # Job parameters matching the sync_reviewed_ddl.py notebook widgets
-            job_parameters = {"reviewed_file_name": filename, "mode": mode}
+            job_parameters = {
+                "reviewed_file_name": filename,
+                "mode": mode,
+                "current_user_override": job_user,  # Pass actual user to override config
+            }
 
             job_name = f"ddl_sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-            # Get notebook path using deploying user, not service principal
-            current_user = self.workspace_client.current_user.me().user_name
+            # With OBO, current_user is the actual app user
+            # But notebook path uses the deployer's bundle location
+            app_name = AppConfig.get_app_name()
+            bundle_target = AppConfig.get_bundle_target()
+            use_shared = config.get("use_shared_bundle_location", False)
 
-            # Check if current user is service principal, use deploying user instead
-            if "@" not in current_user or current_user.startswith("034f50f1"):
-                # This is a service principal, use the actual deploying user
-                deploying_user = "eli.swanson@databricks.com"  # From app.yml config
-                notebook_path = f"/Users/{deploying_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
-            else:
-                # This is a real user
-                notebook_path = f"/Users/{current_user}/.bundle/dbxmetagen/dev/files/notebooks/sync_reviewed_ddl"
+            notebook_path = UserContextManager.get_notebook_path(
+                notebook_name="sync_reviewed_ddl",
+                bundle_name=app_name,
+                bundle_target=bundle_target,
+                use_shared=use_shared,
+            )
 
             # Create the job
             job = self.workspace_client.jobs.create(

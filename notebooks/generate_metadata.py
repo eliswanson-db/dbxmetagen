@@ -56,18 +56,32 @@ from src.dbxmetagen.main import main
 dbutils.widgets.dropdown("cleanup_control_table", "false", ["true", "false"])
 dbutils.widgets.dropdown("mode", "comment", ["comment", "pi"])
 dbutils.widgets.text("env", "")
+dbutils.widgets.text("catalog_name", "")
+dbutils.widgets.text("host_name", "")
 dbutils.widgets.text("table_names", "")
+dbutils.widgets.text("current_user", "")
 
 # COMMAND ----------
 
 # Get widget values and set up environment
 table_names = dbutils.widgets.get("table_names")
+catalog_name = dbutils.widgets.get("catalog_name")
+host_name = dbutils.widgets.get("host_name")
 mode = dbutils.widgets.get("mode")
 env = dbutils.widgets.get("env")
 cleanup_control_table = dbutils.widgets.get("cleanup_control_table")
+current_user_param = dbutils.widgets.get("current_user")
 
 # Set up Databricks environment variables and get current user
-current_user = setup_databricks_environment(dbutils)
+detected_user = setup_databricks_environment(dbutils)
+
+# Use parameter if provided, otherwise use detected user
+if current_user_param and current_user_param.strip():
+    current_user = current_user_param.strip()
+    print(f"Using current_user parameter: {current_user}")
+else:
+    current_user = detected_user
+    print(f"Using detected current_user: {current_user}")
 
 # Get job context if running in a job
 job_id = get_job_context(dbutils)

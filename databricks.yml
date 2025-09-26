@@ -4,9 +4,11 @@ bundle:
 
 include:
   - resources/jobs/*.yml
-  - resources/apps/*.yml
+  - resources/apps/*.yml  # Temporarily disabled to fix state mismatch - re-enable after bundle works
   - benchmarks/resources/jobs/benchmarks/*.yml
   - variables.yml
+  - resources/app_variables.yml
+  - resources/secrets.yml
 
 
 artifacts:
@@ -19,17 +21,15 @@ targets:
   dev:
     mode: development
     default: true
-    variables: 
-      job_table_names: default.simple_test
 
     workspace:
-      root_path: ${var.current_working_directory}
+      #root_path: ${var.current_working_directory}
       host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update dev host name here to use DAB deploy>
     permissions:
-      - user_name: ${var.current_user}
+      - user_name: ${var.deploying_user}
         level: CAN_MANAGE
-      - service_principal_name: 034f50f1-0a51-4d3d-9137-ca312e31fc23
-        level: CAN_MANAGE
+      # - service_principal_name: ${var.app_service_principal_application_id}
+      #   level: CAN_MANAGE
 
   prod:
     mode: production
