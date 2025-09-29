@@ -16,19 +16,48 @@ if ! databricks current-user me --profile DEFAULT &> /dev/null; then
     echo "Error: Not authenticated with Databricks. Run: databricks configure"
     exit 1
 fi
+ 
 
-CURRENT_USER=$(databricks current-user me --profile DEFAULT --output json | jq -r '.userName')
+add_service_principal_simple() {
+    # Copy databricks.yml and add service principal permissions to the dev section
+
+    SOURCE_FILE="databricks.yml"
+    TARGET_FILE="databricks_final.yml"
+
+    # Copy the original file
+    cp "$SOURCE_FILE" "$TARGET_FILE"
+
+    # Add service principal lines after the existing user permissions in dev section
+    sed -i.tmp '/^  dev:/,/^  [a-z]/{
+        /^        level: CAN_MANAGE/{
+            a\
+        - service_principal_name: ${var.app_service_principal_application_id}\
+            level: CAN_MANAGE
+        }
+    }' "$TARGET_FILE"
+
+    # Clean up sed backup file
+    #rm "${TARGET_FILE}.tmp" 2>/dev/null
+
+echo "Created $TARGET_FILE with service principal permissions added to dev section"
+}
 
 check_for_deployed_app() {
     SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
-    if [ -n "$SP_ID" ]; then
-        export APP_SP_ID="$SP_ID"
-    else        
+    echo "SP_ID: $SP_ID"
+    export APP_SP_ID="$SP_ID"
+    if [ ! -n "$SP_ID" ]; then
         echo "App does not exist. Running initial deployment to get app SP ID..."
-        validate_bundle
-        deploy_bundle
-        SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
-        export APP_SP_ID="$SP_ID"
+        validate_bundle -t ${TARGET}_spn --var "app_service_principal_application_id=None"
+        deploy_bundle -t ${TARGET}_spn --var "app_service_principal_application_id=None"
+    else        
+        echo "App already exists. Using existing SP ID: $APP_SP_ID"
+        add_service_principal_simple
+        validate_bundle -t ${TARGET} -bundle_file "databricks_final.yml" --var "app_service_principal_application_id=$APP_SP_ID"
+        deploy_bundle -t ${TARGET} -bundle_file "databricks_final.yml" --var "app_service_principal_application_id=$APP_SP_ID"
+        rm databricks_final.yml
+        #SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
+        #export APP_SP_ID="$SP_ID"
     fi
 }
 
@@ -108,23 +137,49 @@ run_permissions_setup() {
     fi
 }
 
+create_deploying_user_yml() {
+    echo "Creating deploying_user.yml with current user..."
+    
+    # Create the deploying_user.yml file in the app directory
+    cat > app/deploying_user.yml << EOF
+# Auto-generated during deployment - contains the user who deployed this app
+# This file is created by deploy.sh and should not be committed to version control
+# However, it cannot be added to gitignore because asset bundles obeys gitignore.
+deploying_user: "$CURRENT_USER"
+EOF
+
+create_app_env_yml() {
+    echo "Creating app_env.yml with target..."
+    cat > app/app_env.yml << EOF
+# Auto-generated during deployment - contains the user who deployed this app
+# This file is created by deploy.sh and should not be committed to version control
+app_env: "$APP_ENV"
+EOF
+}
+
+    
+    echo "✅ deploying_user.yml created with user: $CURRENT_USER"
+}
+
+cleanup_temp_yml_files() {
+    if [ -f app/deploying_user.yml ]; then
+        echo "Cleaning up deploying_user.yml..."
+        rm app/deploying_user.yml
+    fi
+    if [ -f app/app_env.yml ]; then
+        echo "Cleaning up app_env.yml..."
+        rm app/app_env.yml
+    fi
+}
+
 start_app() {
-    #echo "Starting app..."
-    #APP_ID=$(databricks apps list --output json | jq -r ".[] | select(.name==\"dbxmetagen-app\") | .id")
     echo "App ID: $APP_ID"
-    #SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.service_principal.application_id')
     echo "Service Principal ID: $APP_SP_ID"
 
-    # 3. Inject SP ID into bundle (adjust as appropriate for your templating/vars strategy)
-    # export APP_SP_ID="$SP_ID"
-    # if app_service_principal_application_id=$CURRENT_USER; then
-    #     export APP_SP_ID="$SP_ID"
-    # fi
-    #envsubst < databricks.yml > databricks.bundle.final.yml
+    # Create deploying_user.yml before deployment
 
-    # 4. Deploy all resources (with permissions now referencing the SP ID)
-    #databricks bundle deploy --target=$TARGET --var="app_service_principal_application_id=$SP_ID"
-    databricks bundle run -t $TARGET --var="{deploying_user=$CURRENT_USER,app_service_principal_application_id=$APP_SP_ID}" dbxmetagen_app
+    # Deploy and run the app - the app will read deploying_user.yml directly
+    databricks bundle run -t $TARGET --var="deploying_user=$CURRENT_USER" --var="app_service_principal_application_id=$APP_SP_ID" dbxmetagen_app
 }
 
 # Parse arguments
@@ -133,6 +188,8 @@ DEBUG_MODE=false
 CREATE_TEST_DATA=false
 TARGET="dev"
 PROFILE="DEFAULT"
+CURRENT_USER=$(databricks current-user me --profile DEFAULT --output json | jq -r '.userName')
+
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -173,18 +230,22 @@ done
 # Main execution
 echo "DBX MetaGen Deployment"
 echo "Target: $TARGET"
+APP_ENV=${TARGET}
 
 #Copy variables to app folder if it exists
 if [ -f "variables.yml" ]; then
-   cp variables.yml app/ 2>/dev/null || true
+   cp resources/app_variables.yml app/ 2>/dev/null || true
 fi
 
 # Deploy everything
 #create_secret_scope
+create_deploying_user_yml
+create_app_env_yml
 check_for_deployed_app
 validate_bundle
 deploy_bundle
 start_app
+cleanup_temp_yml_files
 
 #Run permissions if requested
 if [ "$RUN_PERMISSIONS" = true ]; then
@@ -193,6 +254,3 @@ fi
 
 echo "Deployment complete!"
 echo "Access your app in Databricks workspace > Apps > dbxmetagen-app"
-
-
-

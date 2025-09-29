@@ -51,8 +51,10 @@ class ConfigManager:
         return self._cache_and_return_config(config)
 
     def _load_variables_yml(self) -> Dict[str, Any]:
-        """Load configuration from variables.yml file."""
+        """Load configuration from variables.yml file and merge with deploying_user.yml if available."""
         yaml_path = "./variables.yml"  # Root of project
+        deploying_user_path = "./deploying_user.yml"
+        app_env = "./app_env.yml"
 
         if not os.path.exists(yaml_path):
             raise FileNotFoundError(f"variables.yml not found at {yaml_path}")
@@ -76,7 +78,51 @@ class ConfigManager:
             else:
                 config[key] = value_config
 
-        logger.info(f"Successfully loaded variables.yml with {len(config)} keys")
+        # Load deploying_user.yml if it exists (created during deployment)
+        deploying_user_path = "./deploying_user.yml"
+        if os.path.exists(deploying_user_path):
+            logger.info(
+                f"Loading deploying user configuration from {deploying_user_path}"
+            )
+            try:
+                with open(deploying_user_path, "r") as f:
+                    deploying_config = yaml.safe_load(f)
+                    st.info(f"Deploying user config: {deploying_config}")
+
+                # Merge deploying user config into main config
+                if deploying_config:
+                    config.update(deploying_config)
+                    logger.info(
+                        f"Successfully merged deploying_user.yml - deploying_user: {deploying_config.get('deploying_user', 'unknown')}"
+                    )
+                    st.info(
+                        f"Successfully merged deploying_user.yml - deploying_user: {config.get('deploying_user', 'unknown')}"
+                    )
+                    st.session_state.deploying_user = config.get(
+                        "deploying_user", "unknown"
+                    )
+
+            except Exception as e:
+                logger.warning(f"Failed to load deploying_user.yml: {e}")
+
+        logger.info(f"Successfully loaded configuration with {len(config)} keys")
+        return config
+
+    def _load_env_yml(self, filename: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Load configuration from environment file."""
+        with open(filename, "r") as f:
+            yaml_config = yaml.safe_load(f)
+
+        if config:
+            config.update(yaml_config)
+            logger.info(
+                f"Successfully merged deploying_user.yml - deploying_user: {deploying_config.get('deploying_user', 'unknown')}"
+            )
+            st.info(
+                f"Successfully merged deploying_user.yml - deploying_user: {config.get('deploying_user', 'unknown')}"
+            )
+            st.session_state.deploying_user = config.get("deploying_user", "unknown")
+            st.session_state.app_env = config.get("app_env", "unknown")
         return config
 
     def _get_cached_config(self) -> Optional[Dict[str, Any]]:
@@ -274,13 +320,11 @@ class DatabricksClientManager:
                     if hasattr(st, "session_state"):
                         st.session_state.auth_method = "OBO (x-forwarded-access-token)"
                         st.session_state.app_user = test_user.user_name
-                        try:
-                            st.session_state.deploying_user = (
-                                UserContextManager.get_deploying_user()
-                            )
-                        except ValueError as e:
-                            logger.error(f"Failed to get deploying user: {e}")
-                            st.session_state.deploying_user = "unknown"
+                        # Get deploying user from configuration instead of environment variable
+                        deploying_user = st.session_state.config.get(
+                            "deploying_user", "unknown"
+                        )
+                        st.session_state.deploying_user = deploying_user
                         logger.info(
                             f"🔍 App-wide user tracking - User: {test_user.user_name}, Deployer: {st.session_state.deploying_user}"
                         )
@@ -312,13 +356,11 @@ class DatabricksClientManager:
                 st.session_state.auth_method = "Service Principal (hybrid)"
                 st.session_state.service_principal = sp_user.user_name
                 st.session_state.app_user = actual_user if actual_user else "unknown"
-                try:
-                    st.session_state.deploying_user = (
-                        UserContextManager.get_deploying_user()
-                    )
-                except ValueError as e:
-                    logger.error(f"Failed to get deploying user: {e}")
-                    st.session_state.deploying_user = "unknown"
+                # Get deploying user from configuration instead of environment variable
+                deploying_user = st.session_state.config.get(
+                    "deploying_user", "unknown"
+                )
+                st.session_state.deploying_user = deploying_user
 
                 logger.info(
                     f"🔍 App-wide user tracking - SP: {sp_user.user_name}, User: {actual_user}, Deployer: {st.session_state.deploying_user}"

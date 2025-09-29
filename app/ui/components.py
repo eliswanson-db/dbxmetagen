@@ -125,13 +125,11 @@ class UIComponents:
 
             st.subheader("🚀 Execution Settings")
 
-            # Authentication mode selection
-            use_obo = st.checkbox(
-                "🔐 Use On-Behalf-Of (OBO) Authentication",
-                value=st.session_state.config.get(
-                    "use_obo", True
-                ),  # Default to OBO for easier setup
-                help="If checked, jobs run with your user permissions. If unchecked, jobs run with app service principal permissions.",
+            # TODO: Re-enable OBO authentication when jobs.jobs scope becomes available to non-account admins
+            # For now, we only support SPN (Service Principal) deployment type to avoid permission issues.
+            # The OBO checkbox will be added back as a deployment-time configuration option.
+            st.info(
+                "🔐 Jobs run with Service Principal permissions. Read grants will be applied after completion."
             )
 
             # TODO: Remove cluster_size settings - hiding for now but keeping for backwards compatibility
@@ -143,7 +141,7 @@ class UIComponents:
             #     ),
             # )
             # Hidden but defaulted to medium for jobs
-            cluster_size = "medium"
+            cluster_size = "Medium (2-4 workers)"
 
             apply_ddl = st.checkbox(
                 "⚠️ Apply DDL (CAUTION)",
@@ -163,7 +161,6 @@ class UIComponents:
                         "mode": mode,
                         "cluster_size": cluster_size,
                         "apply_ddl": apply_ddl,
-                        "use_obo": use_obo,
                     }
                 )
 

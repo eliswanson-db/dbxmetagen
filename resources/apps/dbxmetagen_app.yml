@@ -35,9 +35,13 @@ resources:
           job:
             id: ${resources.jobs.sync_ddl_job.id}
             permission: "CAN_MANAGE_RUN"
+          
+        # - name: "deploying_user"
+        #   value: ${var.deploying_user}
         
-        # - name: "app_service_principal_id"
+        # - name: "deploying_user"
         #   secret:
-        #     key: "app_service_principal_id"
+        #     key: "deploying_user"
         #     scope: "dbxmetagen_secret_scope"
         #     permission: "READ"
+

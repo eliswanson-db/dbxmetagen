@@ -1,4 +1,6 @@
 import os
+import mlflow
+import time
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 from openai import OpenAI
@@ -55,13 +57,122 @@ class DatabricksClient(ChatClient):
         **kwargs,
     ) -> ChatCompletion:
         """Create a chat completion using OpenAI client with Databricks endpoint."""
-        return self.openai_client.chat.completions.create(
+
+        # Track timing for benchmarking
+        start_time = time.time()
+
+        response = self.openai_client.chat.completions.create(
             messages=messages,
             model=model,
             max_tokens=max_tokens,
             temperature=temperature,
             **kwargs,
         )
+
+        end_time = time.time()
+        response_time = end_time - start_time
+
+        # Extract token usage from response
+        token_usage = self._extract_and_log_usage(
+            response, model, response_time, messages, max_tokens, temperature
+        )
+
+        # Store token usage in response for easy access
+        if hasattr(response, "__dict__"):
+            response.token_usage = token_usage
+
+        return response
+
+    def _extract_and_log_usage(
+        self,
+        response: ChatCompletion,
+        model: str,
+        response_time: float,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+    ) -> dict:
+        """Extract token usage and log to MLFlow for benchmarking."""
+
+        # Extract usage information from response
+        usage_info = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "response_time_seconds": response_time,
+        }
+
+        if hasattr(response, "usage") and response.usage:
+            usage_info.update(
+                {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+            )
+
+        # Calculate additional metrics for benchmarking
+        tokens_per_second = (
+            usage_info["completion_tokens"] / response_time if response_time > 0 else 0
+        )
+
+        # Log to MLFlow with detailed context
+        try:
+            mlflow.log_metrics(
+                {
+                    "prompt_tokens": usage_info["prompt_tokens"],
+                    "completion_tokens": usage_info["completion_tokens"],
+                    "total_tokens": usage_info["total_tokens"],
+                    "response_time_seconds": response_time,
+                    "tokens_per_second": tokens_per_second,
+                }
+            )
+
+            # Log parameters for benchmarking context
+            mlflow.log_params(
+                {
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "num_messages": len(messages),
+                }
+            )
+
+            # Log text lengths for additional context
+            total_prompt_length = sum(len(msg.get("content", "")) for msg in messages)
+            mlflow.log_metrics(
+                {
+                    "total_prompt_length": total_prompt_length,
+                    "chars_per_prompt_token": total_prompt_length
+                    / max(usage_info["prompt_tokens"], 1),
+                }
+            )
+
+        except Exception as e:
+            print(f"Warning: Failed to log to MLFlow: {e}")
+
+        return usage_info
+
+    def get_token_usage(self, response: ChatCompletion) -> dict:
+        """Utility method to get token usage from a response."""
+        if hasattr(response, "token_usage"):
+            return response.token_usage
+
+        # Fallback to extracting from response.usage directly
+        if hasattr(response, "usage") and response.usage:
+            return {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+                "response_time_seconds": 0,  # Not available in fallback
+            }
+
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "response_time_seconds": 0,
+        }
 
     def create_structured_completion(
         self,

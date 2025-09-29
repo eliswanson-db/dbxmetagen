@@ -143,6 +143,10 @@ class DBXMetaGenApp:
                         st.sidebar.write(
                             f"  - Deploying User: {st.session_state.get('deploying_user')}"
                         )
+                    if st.session_state.get("app_env"):
+                        st.sidebar.write(
+                            f"  - App Environment: {st.session_state.get('app_env')}"
+                        )
 
                 except Exception as e:
                     st.sidebar.write(

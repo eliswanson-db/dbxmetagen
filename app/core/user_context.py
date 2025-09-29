@@ -36,16 +36,13 @@ class UserContextManager:
         Raises:
             ValueError: If deploying_user cannot be determined
         """
-        deploying_user = os.getenv("DEPLOY_USER_NAME")
-
-        if not deploying_user:
-            # Try to get from session state if set during config
-            deploying_user = st.session_state.get("deploying_user")
+        # Get deploying user from session state (loaded from deploying_user.yml)
+        deploying_user = st.session_state.get("deploying_user")
 
         if not deploying_user:
             raise ValueError(
-                "Deploying user not configured. Set DEPLOY_USER_NAME environment variable "
-                "or configure deploying_user in session state."
+                "Deploying user not configured. This should be loaded from deploying_user.yml during deployment. "
+                "Please ensure the app was deployed correctly."
             )
 
         return deploying_user.strip()
