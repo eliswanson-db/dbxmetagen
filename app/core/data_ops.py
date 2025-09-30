@@ -724,6 +724,7 @@ class MetadataProcessor:
             logger.error(f"Error in _save_updated_metadata_for_job: {str(e)}")
             return None
 
+    # STep 10: this is what gets triggered when the user clicks the "Apply Metadata" button
     def _trigger_ddl_sync_job(self, filename: str, job_manager) -> Dict[str, Any]:
         """Trigger a Databricks job to execute DDL using sync_reviewed_ddl.py notebook."""
         try:

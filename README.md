@@ -1,23 +1,26 @@
-# dbxmetagen: GenAI-Assisted Metadata Generation for Databricks
+# dbxmetagen: GenAI-Assisted Metadata Generation and Management for Databricks
 
-# TODO: Improve review metadata tab
-# TODO: Two-pager document describing it - do a good job with this
-  - problem statement needs to be simple enough to understand why this is important and why this fills a gap
-      -   do the gap analysis
-      -   simple enough so that we can lead with that
-      -   and then the solution
-   - applicability -> where do we want this to be used?
-      - platform teams 
-      - for migrations
-      - anywhere we want to bulk generate + id/classify metadat
-      - every customer could be a target here for us
-   - 
+## Table of Contents
 
+- [Project Overview](#project-overview)
+- [Disclaimer](#disclaimer)
+- [Solution Overview](#solution-overview)
+- [User Guide](#user-guide)
+  - [Personas](#personas)
+  - [Workflow Diagrams](#workflow-diagrams)
+- [Minimal Setup](#minimal-setup)
+- [Full Setup Instructions](#full-setup-instructions)
+- [Configuration Reference](#configuration-reference)
+- [Workflow and Usage Patterns](#workflow-and-usage-patterns)
+- [Current Status](#current-status)
+- [Discussion Points & Recommendations](#discussion-points--recommendations)
+- [Details of Comment Generation and PI Identification](#details-of-comment-generation-and-pi-identification)
+- [Performance Details and Skew](#performance-details-and-skew)
+- [Under Development](#under-development)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
-
-## Expanded Documentation with Full Variable Reference
-
-This document provides a comprehensive guide to **dbxmetagen**, integrating all information from the original README and expanding it with details from the `variables.yml` configuration. Every option, workflow, and advanced usage pattern is included to ensure full transparency and control for users.
+## Project Overview
 
 ```mermaid
 graph LR
@@ -43,31 +46,12 @@ graph LR
     class F,G output
 ```
 
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Disclaimer](#disclaimer)
-- [Solution Overview](#solution-overview)
-- [User Guide](#user-guide)
-  - [Personas](#personas)
-  - [Workflow Diagrams](#workflow-diagrams)
-- [Minimal Setup](#minimal-setup)
-- [Full Setup Instructions](#full-setup-instructions)
-- [Configuration Reference](#configuration-reference)
-- [Workflow and Usage Patterns](#workflow-and-usage-patterns)
-- [Current Status](#current-status)
-- [Discussion Points & Recommendations](#discussion-points--recommendations)
-- [Details of Comment Generation and PI Identification](#details-of-comment-generation-and-pi-identification)
-- [Performance Details and Skew](#performance-details-and-skew)
-- [Under Development](#under-development)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-
-## Project Overview
-
 **dbxmetagen** is a utility for generating high-quality descriptions for tables and columns in Databricks, enhancing enterprise search, governance, and Databricks Genie performance. It can identify and classify personal information (PI) into PII, PHI, and PCI. The tool is highly configurable, supporting bulk operations, SDLC integration, and fine-grained control over privacy and output formats.
 
 **Quickstart Options**
+
+### Simplest Option (no app)
+1. Clone the repo into your Databricks workspace into a Git Folder
 
 ### Option 1: Streamlit App (Recommended for Business Users)
 DBX MetaGen includes a production-quality Streamlit app with an intuitive web interface:
