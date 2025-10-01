@@ -982,22 +982,13 @@ class ExportError(Exception):
 
 def create_folder_if_not_exists(path: str) -> None:
     """Create directory if it doesn't exist. For Unity Catalog volumes, directories are created automatically."""
-    # Check if this is a Unity Catalog volume path
-    if path.startswith("/Volumes/"):
-        # For UC volumes, directories are created automatically when files are written
-        logger.info(
-            f"Unity Catalog volume path detected: {path} - directory will be created automatically"
-        )
-        return
-
-    # Handle local file system paths
     try:
         if not os.path.exists(path):
             os.makedirs(path)
             logger.info(f"Created directory: {path}")
     except Exception as e:
         logger.error(f"Failed to create directory {path}: {e}")
-        raise ExportError(f"Directory creation failed: {e}")
+        raise ExportError(f"Directory creation failed: {e}") from e
 
 
 def export_df_to_excel(df: pd.DataFrame, output_file: str, export_folder: str) -> None:
