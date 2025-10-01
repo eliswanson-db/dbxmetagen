@@ -77,7 +77,7 @@ variables:
     default: false
   apply_ddl:
     description: Whether to apply DDL directly to the specified environment or not. Modify permissions needed, and be aware that this will alter tables.
-    default: true
+    default: false
   ddl_output_format:
     description: Output format can be via sql file (default) or via tsv or excel if this improves reviewability. This file is the individual output files.
     default: sql
