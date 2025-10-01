@@ -4,8 +4,12 @@ bundle:
 
 include:
   - resources/jobs/*.yml
-  - resources/schemas/*.yml
+  - resources/apps/*.yml  # Temporarily disabled to fix state mismatch - re-enable after bundle works
+  - benchmarks/resources/jobs/benchmarks/*.yml
   - variables.yml
+  - resources/app_variables.yml
+  #- resources/secrets.yml
+
 
 artifacts:
   default:
@@ -14,17 +18,25 @@ artifacts:
     path: .
 
 targets:
+#   dev_spn:
+#     mode: development
+
+#     workspace:
+#       #root_path: ${var.current_working_directory}
+#       host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update dev host name here to use DAB deploy>
+#     permissions:
+#       - user_name: ${var.deploying_user}
+#         level: CAN_MANAGE
+
   dev:
     mode: development
     default: true
-    variables: 
-      job_table_names: default.simple_test
 
     workspace:
-      root_path: ${var.current_working_directory}
+      #root_path: ${var.current_working_directory}
       host: https://adb-830292400663869.9.azuredatabricks.net/ #<Update dev host name here to use DAB deploy>
     permissions:
-      - user_name: ${var.current_user}
+      - user_name: ${var.deploying_user}
         level: CAN_MANAGE
 
   prod:
@@ -35,5 +47,9 @@ targets:
     permissions:
       - user_name: ${var.current_user}
         level: CAN_MANAGE
+      - service_principal_name: ${var.app_service_principal_application_id}
+        level: CAN_MANAGE
     run_as:
       user_name: ${var.current_user} #sp name should be used instead for true production cases.
+
+

@@ -1,23 +1,12 @@
-import os
 from abc import ABC, abstractmethod
 import json
-from pyspark.sql import SparkSession
 from pydantic import ValidationError
 from typing import Tuple, Dict, List, Any, Union
-from openai.types.chat.chat_completion import (
-    Choice,
-    ChatCompletion,
-    ChatCompletionMessage,
-)
-import mlflow
-from mlflow.types.llm import TokenUsageStats, ChatResponse
-from openai import OpenAI
+from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel, ConfigDict, field_validator
 from src.dbxmetagen.config import MetadataConfig
 from src.dbxmetagen.error_handling import exponential_backoff
-from src.dbxmetagen.prompts import Prompt, CommentPrompt, PromptFactory
-from databricks_langchain import ChatDatabricks
-from src.dbxmetagen.deterministic_pi import detect_pi
+from src.dbxmetagen.chat_client import ChatClientFactory
 
 
 class Response(BaseModel):
@@ -60,15 +49,9 @@ class SummaryCommentResponse(Response):
 
 
 class MetadataGenerator(ABC):
-    @property
-    def openai_client(self):
-        return OpenAI(
-            api_key=os.environ["DATABRICKS_TOKEN"],
-            base_url=os.environ["DATABRICKS_HOST"] + "/serving-endpoints",
-        )
-
     def from_context(self, config):
         self.config = config
+        self.chat_client = ChatClientFactory.create_client(config)
 
     @abstractmethod
     def get_responses(self) -> Tuple[Response, ChatCompletion]:
@@ -94,14 +77,12 @@ class CommentGenerator(MetadataGenerator):
         return comment_response, message_payload
 
     def predict_chat_response(self, prompt_content):
-        self.chat_response = (
-            ChatDatabricks(
-                endpoint=self.config.model,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-            )
-            .with_structured_output(CommentResponse)
-            .invoke(prompt_content)
+        self.chat_response = self.chat_client.create_structured_completion(
+            messages=prompt_content,
+            response_model=CommentResponse,
+            model=self.config.model,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
         )
         return self.chat_response
 
@@ -219,18 +200,17 @@ class PIIdentifier(MetadataGenerator):
 
     def predict_chat_response(self, prompt_content):
         try:
-            self.chat_response = (
-                ChatDatabricks(
-                    endpoint=self.config.model,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                )
-                .with_structured_output(PIResponse)
-                .invoke(prompt_content)
+            self.chat_response = self.chat_client.create_structured_completion(
+                messages=prompt_content,
+                response_model=PIResponse,
+                model=self.config.model,
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
             )
-        except:
-            print("Validation error - response \n\n\n response")
-        return self.chat_response
+            return self.chat_response
+        except Exception as e:
+            print(f"Validation error - response: {e}")
+            raise e
 
     def get_pi_response(
         self,
