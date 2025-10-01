@@ -33,51 +33,73 @@
 # COMMAND ----------
 
 import sys
-sys.path.append('../')
+
+sys.path.append("../")
 
 # COMMAND ----------
 
 import os
 import json
-from src.dbxmetagen.prompts import Prompt, PIPrompt, CommentPrompt, PromptFactory
-from src.dbxmetagen.config import MetadataConfig
-from src.dbxmetagen.metadata_generator import (PIResponse, CommentResponse, Response, MetadataGenerator, CommentGenerator, PIIdentifier, MetadataGeneratorFactory)
-from src.dbxmetagen.processing import split_table_names, sanitize_email
-from src.dbxmetagen.error_handling import exponential_backoff
+from src.dbxmetagen.databricks_utils import (
+    setup_databricks_environment,
+    get_job_context,
+)
 from src.dbxmetagen.main import main
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Set up widgets
+# MAGIC # Set up widgets and environment
 
 # COMMAND ----------
 
 dbutils.widgets.dropdown("cleanup_control_table", "false", ["true", "false"])
 dbutils.widgets.dropdown("mode", "comment", ["comment", "pi"])
 dbutils.widgets.text("env", "")
+dbutils.widgets.text("catalog_name", "")
+dbutils.widgets.text("host_name", "")
 dbutils.widgets.text("table_names", "")
+dbutils.widgets.text("current_user", "")
 
 # COMMAND ----------
 
+# Get widget values and set up environment
 table_names = dbutils.widgets.get("table_names")
+catalog_name = dbutils.widgets.get("catalog_name")
+host_name = dbutils.widgets.get("host_name")
 mode = dbutils.widgets.get("mode")
 env = dbutils.widgets.get("env")
 cleanup_control_table = dbutils.widgets.get("cleanup_control_table")
-context_json = dbutils.notebook.entry_point.getDbutils().notebook().getContext().toJson()
-context = json.loads(context_json)
-job_id = context.get("tags", {}).get("jobId", None)
-current_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+current_user_param = dbutils.widgets.get("current_user")
+
+# Set up Databricks environment variables and get current user
+detected_user = setup_databricks_environment(dbutils)
+if not host_name:
+    host_name = os.environ.get("DATABRICKS_HOST")
+print("host_name", host_name)
+print("DATABRICKS_HOST", os.environ.get("DATABRICKS_HOST"))
+
+# Use parameter if provided, otherwise use detected user
+if current_user_param and current_user_param.strip():
+    current_user = current_user_param.strip()
+    print(f"Using current_user parameter: {current_user}")
+else:
+    current_user = detected_user
+    print(f"Using detected current_user: {current_user}")
+
+# Get job context if running in a job
+job_id = get_job_context(dbutils)
+
 notebook_variables = {
+    "catalog_name": catalog_name,
+    "host_name": host_name,
     "table_names": table_names,
     "mode": mode,
     "env": env,
     "current_user": current_user,
     "cleanup_control_table": cleanup_control_table,
-    "job_id": job_id
+    "job_id": job_id,
 }
-api_key=dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-os.environ["DATABRICKS_TOKEN"]=api_key
 
 # COMMAND ----------
 

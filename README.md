@@ -1,8 +1,4 @@
-# dbxmetagen: GenAI-Assisted Metadata Generation for Databricks
-
-## Expanded Documentation with Full Variable Reference
-
-This document provides a comprehensive guide to **dbxmetagen**, integrating all information from the original README and expanding it with details from the `variables.yml` configuration. Every option, workflow, and advanced usage pattern is included to ensure full transparency and control for users.
+# dbxmetagen: GenAI-Assisted Metadata Generation and Management for Databricks
 
 ## Table of Contents
 
@@ -26,7 +22,51 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 
 ## Project Overview
 
+```mermaid
+graph LR
+    A["🚀 Process<br/>Tables"] --> B["📊 Extract Schema<br/>& Sample Data"]
+    
+    B --> C["📝 Create Prompts<br/>(Comment/PII)"]
+    
+    C --> D["🤖 LLM Call<br/>(Foundational Model Endpoints)"]
+    
+    D --> E["🔄 Process Response<br/>(Parse & Validate)"]
+    
+    E --> F["🛠️ Generate DDL<br/>(ALTER TABLE statements)"]
+    
+    F --> G["💾 Apply<br/>to Tables"]
+    
+    %% Style for slide presentation
+    classDef main fill:#e3f2fd,stroke:#1976d2,stroke-width:3px,font-size:14px
+    classDef llm fill:#fff3e0,stroke:#f57c00,stroke-width:3px,font-size:14px
+    classDef output fill:#e8f5e8,stroke:#388e3c,stroke-width:3px,font-size:14px
+    
+    class A,B,C,E main
+    class D llm
+    class F,G output
+```
+
 **dbxmetagen** is a utility for generating high-quality descriptions for tables and columns in Databricks, enhancing enterprise search, governance, and Databricks Genie performance. It can identify and classify personal information (PI) into PII, PHI, and PCI. The tool is highly configurable, supporting bulk operations, SDLC integration, and fine-grained control over privacy and output formats.
+
+**Quickstart Options**
+
+### Simplest Option (no app)
+1. Clone the repo into your Databricks workspace into a Git Folder
+
+### Option 1: Streamlit App (Recommended for Business Users)
+DBX MetaGen includes a production-quality Streamlit app with an intuitive web interface:
+
+1. **Deploy the app**: `./deploy_app.sh`
+2. **Access through Databricks workspace** under Apps
+3. **Configure and run** through the web interface
+
+See [`app/README.md`](app/README.md) for detailed app documentation.
+
+### Option 2: Traditional Notebooks (For Technical Users)
+1. Clone the repo into a Git Folder in Databricks.
+2. Update host and catalog name in `variables.yml`. Make sure the catalog exists.
+3. Update `notebooks/table_names.csv` - what tables do you want to generate comments, or identify PII and PHI for?
+4. Set notebook widget for comment or PI mode and run the notebook.
 
 ## Disclaimer
 
@@ -82,13 +122,48 @@ Both primary entry points for this application are Databricks notebooks.
 <br/>
 <br/>
 
-## Minimal Setup
+### Minimal Setup
+1. Clone the repo into Databricks to a Git Folder.
+1. In variables.yml, update the host, the catalog_name, and if needed the apply_ddl setting if you want it to add the comments or PI definitions directly to a table.
+1. Set the widget for comment or pi and run the notebook.
+1. Update notebooks/table_names.csv
 
-1. Clone the repo into Databricks (Git Folder or Workspace).
-2. Update `variables.yml` (host, catalog_name, etc.).
-3. Update `notebooks/table_names.csv`.
-4. Set notebook widget for comment or PI mode and run the notebook.
+### No workspace files setup
+1. Follow minimal setup guidelines, but move all files in configuration_files folder to a volume that you have access to.
 
+### Setup
+1. Clone the Repo into Databricks or locally
+1. If cloned into Repos in Databricks, one can run the notebook using an all-purpose cluster (tested on 14.3 ML LTS, 15.4 ML LTS, 16.2 ML) without further deployment, simply adjusting variables.yml and widgets in the notebook.
+   1. Alternatively, run the notebook deploy.py, open the web terminal, copy-paste the path and command from deploy.py and run it in the web terminal. This will run an asset bundle-based deploy in the Databricks UI web terminal.
+   1. The end result of this approach is to deploy a job. Table names can be added to the job itself for users with CAN MANAGE, or to table_names.csv as for the interactive workload.
+   1. Default workflow runs both PI identification/classification and comment generation.
+1. Library installs in pyproject.toml should not need to be adjusted. A pre-commit hook builds a requirements.txt that's referenced by the main notebook. Expect that library installs may be different for model registration in advanced usage (not fully implemented).
+1. If cloned locally, we recommend using Databricks asset bundle build to create and run a workflow.
+1. Either create a catalog or use an existing one. Default catalog is called dbxmetagen.
+1. Whether using asset bundles, or the notebook run, adjust the host urls, catalog name, and if desired schema name in resources/variables/variables.yml.
+1. Review the settings in the config.py file in src/dbxmetagen to whatever settings you need. If you want to make changes to variables in your project, change them in the notebook widget.
+   1. Make sure to check the options for add_metadata and apply_ddl and set them correctly. Add metadata will run a describe extended on every column and use the metadata in table descriptions, though ANALYZE ... COLUMNS will need to have been run to get useful information from this.
+   1. You also can adjust sample_size, columns_per_call, and ACRO_CONTENT, as well as many other variables in variables.yml.
+   1. Point to a test table to start, though by default DDL will not be applied, instead it will only be generated and added to .sql files in the volume generated_metadata.
+   1. Settings in the notebook widgets will override settings in config.py, so make sure the widgets in the main notebook are updated appropriately.
+1. In notebooks/table_names.csv, keep the first row as _table_name_ and add the list of tables you want metadata to be generated for. Add them as <schema>.<table> if they are in the same catalog that you define your catalog in variables.yml file separately, or you can use a three-level namespace for these table names.
+
+### Configurations
+1. Most configurations that users should change are in variables.yml. There are a variety of useful options, please read the descriptions, I will not rewrite them all here.
+
+### Current status
+1. Tested on DBR 15.4 ML LTS and 14.3 ML LTS.
+1. Default settings currently create ALTER scripts and puts in a volume. Tested in a databricks workspace.
+1. Some print-based logging to make understanding what's happening and debugging easy in the UI.
+
+### Discussion points and recommendations:
+1. Throttling - the default PPT endpoints will throttle eventually. Likely this will occur wehn running backfills for large numbers of tables, or if you have other users using the same endpoint.
+1. Sampling - setting a reasonable sample size for data will serve to provide input from column contents without leading to swamping of column names.
+1. Chunking - running a smaller number of columns at once will result in more attention paid and more tokens PER column but will probably cost slightly more and take longer.
+1. One of the easiest ways to speed this up and get terser answers is to ramp up the columns per call - compare 5 and 50 for example. This will impact complexity of results.
+1. Larger chunks will result in simpler comments with less creativity and elaboration.
+1. Remember that PPT endpoints (the default) are not HIPAA compliant, you are responsible for setting up appropriate endpoints for your security needs.
+1. For 'pi' mode, the recommendation is to potentially use more rows of data, and smaller chunks given that scanning the data is important for identifying PI.
 
 ## Full Setup Instructions
 
@@ -104,6 +179,7 @@ Both primary entry points for this application are Databricks notebooks.
 1. Some errors are silent by design, but they always show up in the log table, so review it if you are not seeing the outputs you expect.
 1. If you get an error partway through a run, the control table will still keep in memory the tables you entered the first time that haven't run yet, so you should be able to remove the table names from table_names.csv and run it again and it should pick up any unfinished tables. If you don't, you'll see that they all get run again anyways. This checkpointing is a feature.
 1. To make sure that column constraints are interpretable, make sure the constraint names relate to the column that they constrain, as constraints are pulled from the table metadata, not the column metadata, and they describe the constraint name, not the columns with the constraint.
+1. If you get a Pydantic validation error, it's most likely due to some atypical details of your data or metadata in the specific failing table. First thing to try is another LLM - switch to llama from sonnet or vice versa for example. If that doesn't work, please open an issue on the repo.
 
 ## Configuration Reference
 
