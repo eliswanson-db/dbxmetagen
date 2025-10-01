@@ -47,6 +47,7 @@ class CommentResponse(Response):
 class SummaryCommentResponse(Response):
     pass
 
+
 class MetadataGenerator(ABC):
     def from_context(self, config):
         self.config = config
@@ -206,9 +207,10 @@ class PIIdentifier(MetadataGenerator):
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
             )
-        except:
-            print("Validation error - response \n\n\n response")
-        return self.chat_response
+            return self.chat_response
+        except Exception as e:
+            print(f"Validation error - response: {e}")
+            raise e
 
     def get_pi_response(
         self,

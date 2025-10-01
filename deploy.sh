@@ -29,7 +29,7 @@ add_service_principal_simple() {
 
     # Add service principal lines after the existing user permissions in dev section
     sed -i.tmp '/^  dev:/,/^  [a-z]/{
-        /^        level: CAN_MANAGE/{
+        /^      level: CAN_MANAGE/{
             a\
         - service_principal_name: ${var.app_service_principal_application_id}\
             level: CAN_MANAGE
@@ -53,9 +53,9 @@ check_for_deployed_app() {
     else        
         echo "App already exists. Using existing SP ID: $APP_SP_ID"
         add_service_principal_simple
-        validate_bundle -t ${TARGET} -bundle_file "databricks_final.yml" --var "app_service_principal_application_id=$APP_SP_ID"
-        deploy_bundle -t ${TARGET} -bundle_file "databricks_final.yml" --var "app_service_principal_application_id=$APP_SP_ID"
-        rm databricks_final.yml
+        validate_bundle -t ${TARGET} -bundle_file "databricks_final.yml.tmp" --var "app_service_principal_application_id=$APP_SP_ID"
+        deploy_bundle -t ${TARGET} -bundle_file "databricks_final.yml.tmp" --var "app_service_principal_application_id=$APP_SP_ID"
+        rm databricks_final.yml.tmp
         #SP_ID=$(databricks apps get "dbxmetagen-app" --output json | jq -r '.id')
         #export APP_SP_ID="$SP_ID"
     fi
@@ -170,6 +170,18 @@ cleanup_temp_yml_files() {
         echo "Cleaning up app_env.yml..."
         rm app/app_env.yml
     fi
+    if [ -f app/variables.yml ]; then
+        echo "Cleaning up variables.yml..."
+        rm app/variables.yml
+    fi
+    if [ -f app/app_variables.yml ]; then
+        echo "Cleaning up app_variables.yml..."
+        rm app/app_variables.yml
+    fi
+    if [ -f databricks_final.yml ]; then
+        echo "Cleaning up databricks_final.yml..."
+        rm databricks_final.yml
+    fi
 }
 
 start_app() {
@@ -232,15 +244,22 @@ echo "DBX MetaGen Deployment"
 echo "Target: $TARGET"
 APP_ENV=${TARGET}
 
-#Copy variables to app folder if it exists
-if [ -f "variables.yml" ]; then
-   cp resources/app_variables.yml app/ 2>/dev/null || true
-fi
+copy_variables_to_app() {
+    #Copy variables to app folder if it exists
+    if [ -f "resoures/app_variables.yml" ]; then
+    cp resources/app_variables.yml app/ 2>/dev/null || true
+    fi
+
+    if [ -f "variables.yml" ]; then
+    cp variables.yml app/ 2>/dev/null || true
+    fi
+}
 
 # Deploy everything
 #create_secret_scope
 create_deploying_user_yml
 create_app_env_yml
+copy_variables_to_app
 check_for_deployed_app
 validate_bundle
 deploy_bundle

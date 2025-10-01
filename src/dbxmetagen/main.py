@@ -49,7 +49,10 @@ def main(kwargs):
         raise ValueError(
             "Excel writes in dbxmetagen are not supported on standard runtimes. Please change your output file type to tsv or sql if appropriate."
         )
-    os.environ["DATABRICKS_HOST"] = config.base_url
+    print("DATABRICKS_HOST", os.environ.get("DATABRICKS_HOST"))
+    if not os.environ.get("DATABRICKS_HOST"):
+        os.environ["DATABRICKS_HOST"] = config.base_url
+    # os.environ["DATABRICKS_HOST"] = config.base_url
     setup_ddl(config)
     create_tables(config)
     config.table_names = setup_queue(config)

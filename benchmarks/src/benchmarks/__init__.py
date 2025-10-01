@@ -1,3 +1,0 @@
-"""
-Benchmarking utilities for dbxmetagen.
-"""

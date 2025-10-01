@@ -1114,6 +1114,7 @@ def log_metadata_generation(
     mark_as_deleted(table_name, config)
 
 
+# TODO: Figure out where this is used and if it is needed
 def set_classification_to_null(df: DataFrame, config: MetadataConfig) -> DataFrame:
     """
     Set the classification to null.
@@ -2036,7 +2037,7 @@ def add_ddl_to_dfs(config, table_df, column_df, table_name):
             apply_ddl_to_tables(dfs, config)
     elif config.mode == "pi":
         dfs["pi_column_df"] = add_column_ddl_to_pi_df(config, column_df, "ddl")
-        table_df = create_pi_table_df(dfs["pi_column_df"], table_name)
+        table_df = create_pi_table_df(dfs["pi_column_df"], table_name, config)
         if table_df is not None:
             dfs["pi_table_df"] = set_protected_classification(table_df, config)
         if config.apply_ddl:
@@ -2047,26 +2048,47 @@ def add_ddl_to_dfs(config, table_df, column_df, table_name):
 
 
 def apply_ddl_to_tables(dfs, config):
+    """
+    Applies DDL to the tables.
+
+    Args:
+        dfs (DataFrame): The DataFrame containing the DDL statements.
+        config (MetadataConfig): The configuration object.
+    """
     apply_comment_ddl(dfs[f"{config.mode}_table_df"], config)
     apply_comment_ddl(dfs[f"{config.mode}_column_df"], config)
 
 
-def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
+def create_pi_table_df(
+    column_df: DataFrame, table_name: str, config: MetadataConfig
+) -> DataFrame:
     """
-    Creates a DataFrame for PI information at the table level. Can be expanded to indicate the type of PI, but for tables it's a little more complicated because they can contain multiple, or even have PI that results from multiple columns, such as PHI that are not present in individual columns.
+    Creates a DataFrame for PI information at the table level.
+    Can be expanded to indicate the type of PI, but for tables it's a
+    little more complicated because they can contain multiple, or
+    even have PI that results from multiple columns, such as PHI
+    that are not present in individual columns.
 
     Args:
         column_df (DataFrame): The DataFrame containing PI information at the column level.
         table_name (str): The name of the table.
-
+        config (MetadataConfig): The configuration object.
     Returns:
         DataFrame: A DataFrame with PI information at the table level.
     """
     pi_rows = column_df.filter(col("type").isNotNull())
     # Use first() instead of collect() for single aggregate values
     max_confidence = pi_rows.agg(spark_max("confidence")).first()[0]
-    table_classification = determine_table_classification(pi_rows)
+    table_subclassification = determine_table_classification(pi_rows)
+    if config.use_protected_classification_for_table:
+        table_classification = get_protected_classification_for_table(
+            table_subclassification
+        )
+    else:
+        table_classification = table_subclassification
     table_name = table_name.split(".")[-1]
+    print("table_classification", table_classification)
+    print("table_subclassification", table_subclassification)
 
     pi_table_row = (
         pi_rows.limit(1)
@@ -2076,12 +2098,12 @@ def create_pi_table_df(column_df: DataFrame, table_name: str) -> DataFrame:
         .withColumn("ddl_type", lit("table"))
         .withColumn("confidence", lit(max_confidence))
         .withColumn("column_name", lit("None"))
-        .withColumn("type", lit(table_classification))
+        .withColumn("type", lit(table_subclassification))
         .withColumn("classification", lit(table_classification))
         .withColumn("table_name", lit(table_name))
     )
+    print("pi_table_row", pi_table_row.show())
     pi_table_row = add_table_ddl_to_pi_df(pi_table_row, "ddl")
-    logger.info("PI table rows...", pi_table_row.count())
     return pi_table_row.select(column_df.columns)
 
 
@@ -2124,6 +2146,14 @@ def determine_table_classification(pi_rows: DataFrame) -> str:
         return "all"
     else:
         return "Unknown"
+
+
+def get_protected_classification_for_table(table_classification: str) -> str:
+    """
+    Determines the classification based on the values in the 'classification' column of the pi_rows DataFrame.
+    """
+    if table_classification is not None:
+        return "protected"
 
 
 def summarize_table_content(table_df, config, table_name):

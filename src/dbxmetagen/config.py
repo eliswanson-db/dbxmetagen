@@ -62,6 +62,7 @@ class MetadataConfig:
             "include_existing_table_comment",
             "column_with_reviewed_ddl",
             "current_user",
+            "use_protected_classification_for_table",
         ],
     }
     MODEL_PARAMS = {}

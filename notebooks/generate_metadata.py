@@ -74,6 +74,10 @@ current_user_param = dbutils.widgets.get("current_user")
 
 # Set up Databricks environment variables and get current user
 detected_user = setup_databricks_environment(dbutils)
+if not host_name:
+    host_name = os.environ.get("DATABRICKS_HOST")
+print("host_name", host_name)
+print("DATABRICKS_HOST", os.environ.get("DATABRICKS_HOST"))
 
 # Use parameter if provided, otherwise use detected user
 if current_user_param and current_user_param.strip():
@@ -87,6 +91,8 @@ else:
 job_id = get_job_context(dbutils)
 
 notebook_variables = {
+    "catalog_name": catalog_name,
+    "host_name": host_name,
     "table_names": table_names,
     "mode": mode,
     "env": env,
