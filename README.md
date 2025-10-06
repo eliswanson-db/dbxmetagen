@@ -1,5 +1,9 @@
 # dbxmetagen: GenAI-Assisted Metadata Generation for Databricks
 
+## This is a temporary repo.
+
+This project will soon move to databricks-industry-solutions.
+
 ## Expanded Documentation with Full Variable Reference
 
 This document provides a comprehensive guide to **dbxmetagen**, integrating all information from the original README and expanding it with details from the `variables.yml` configuration. Every option, workflow, and advanced usage pattern is included to ensure full transparency and control for users.
@@ -35,6 +39,7 @@ This document provides a comprehensive guide to **dbxmetagen**, integrating all 
 - Use [AI Guardrails](https://docs.databricks.com/en/ai-gateway/index.html#ai-guardrails) to mitigate risks.
 - Compliance (e.g., HIPAA) is the user's responsibility.
 - Unless configured otherwise, dbxmetagen inspects data and sends it to the specified model endpoint. There are a wide variety of options to control this behavior in detail.
+- To reiterate, all AI-assisted comments, metadata identification, and classification should be reviewed by a human. The goal of this project is accelerating onboarding of new datasets, saving time, and understanding complex data, not to replace human involvement.
 
 ## Solution Overview
 
