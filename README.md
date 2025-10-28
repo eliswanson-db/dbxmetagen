@@ -1,8 +1,11 @@
 # dbxmetagen: GenAI-Assisted Metadata Generation for Databricks
 
-## This is a temporary repo.
+## This repo has been archived and will soon be removed. For dbxmetagen, please go to:
 
-This project will soon move to databricks-industry-solutions.
+https://github.com/databricks-industry-solutions/dbxmetagen
+
+
+
 
 ## Expanded Documentation with Full Variable Reference
 
